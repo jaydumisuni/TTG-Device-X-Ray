@@ -73,23 +73,41 @@ class ReadOnlyUsbServiceProbe:
                 **self._string_dict(helper.get("identifiers", {})),
             }
             mode = str(helper.get("mode") or self._mode_for_endpoint(endpoint)).lower()
+            endpoint_present = self._endpoint_present(endpoint)
+            endpoint_capabilities = self._endpoint_capabilities(endpoint, mode)
+            transport_confirmed = self._endpoint_confirms_transport(
+                endpoint, mode, endpoint_capabilities
+            )
             capabilities = {
                 **self._dict(helper.get("capabilities", {})),
-                **self._endpoint_capabilities(endpoint, mode),
+                **endpoint_capabilities,
                 "read_only": True,
                 "helper_configured": helper_evidence is not None,
+                "pnp_present": endpoint_present,
+                "pnp_status": str(endpoint.get("status", "")),
+                "transport_confirmed": transport_confirmed,
             }
             warnings = self._warnings(helper.get("warnings", []))
             if helper_warning:
                 warnings.insert(0, helper_warning)
+            if endpoint_present and not transport_confirmed:
+                warnings.append(
+                    f"{self.name} vendor USB evidence is present, but service mode was not confirmed"
+                )
             observation_commands = list(commands)
             if helper_evidence is not None:
                 observation_commands.append(helper_evidence)
+
+            if "connected" in helper:
+                connected = bool(helper.get("connected"))
+            else:
+                connected = endpoint_present and transport_confirmed
+
             observations.append(
                 TransportObservation(
                     transport=self.transport,
                     available=True,
-                    connected=bool(helper.get("connected", True)),
+                    connected=connected,
                     mode=mode,
                     identifiers=identifiers,
                     capabilities=capabilities,
@@ -114,11 +132,19 @@ class ReadOnlyUsbServiceProbe:
                     "-NonInteractive",
                     "-Command",
                     (
-                        "$items = Get-CimInstance Win32_PnPEntity | "
-                        "Where-Object { (\"$($_.PNPDeviceID) $($_.Name)\") "
-                        f"-match '{pattern}' }} | "
-                        "Select-Object Name,PNPDeviceID,Status; "
-                        "if ($items) { $items | ConvertTo-Json -Compress }"
+                        f"$pattern = '{pattern}'; "
+                        "if (Get-Command Get-PnpDevice -ErrorAction SilentlyContinue) { "
+                        "$items = Get-PnpDevice -PresentOnly | Where-Object { "
+                        "(\"$($_.InstanceId) $($_.FriendlyName)\") -match $pattern } | "
+                        "Select-Object @{N='Name';E={$_.FriendlyName}},"
+                        "@{N='PNPDeviceID';E={$_.InstanceId}},Status,"
+                        "@{N='Present';E={$true}}; "
+                        "} else { "
+                        "$items = Get-CimInstance Win32_PnPEntity | Where-Object { "
+                        "($_.Present -eq $true -or $_.ConfigManagerErrorCode -ne 45) -and "
+                        "(\"$($_.PNPDeviceID) $($_.Name)\") -match $pattern } | "
+                        "Select-Object Name,PNPDeviceID,Status,Present,ConfigManagerErrorCode; "
+                        "}; if ($items) { $items | ConvertTo-Json -Compress }"
                     ),
                 ],
                 timeout=30,
@@ -144,6 +170,8 @@ class ReadOnlyUsbServiceProbe:
                         "usb_pid": match.group(2).upper() if match else "",
                         "name": line.strip(),
                         "usb_path": line.strip(),
+                        "present": "true",
+                        "status": "present",
                     }
                 )
             return endpoints, commands, True
@@ -260,6 +288,19 @@ class ReadOnlyUsbServiceProbe:
     ) -> dict[str, Any]:
         return {"usb_transport_detected": True, "mode_candidate": mode}
 
+    def _endpoint_confirms_transport(
+        self,
+        endpoint: dict[str, str],
+        mode: str,
+        capabilities: dict[str, Any],
+    ) -> bool:
+        return True
+
+    @staticmethod
+    def _endpoint_present(endpoint: dict[str, str]) -> bool:
+        value = str(endpoint.get("present", "true")).strip().lower()
+        return value not in {"0", "false", "no", "off", "none"}
+
     @classmethod
     def _parse_windows_pnp(cls, text: str) -> list[dict[str, str]]:
         payload = cls._extract_json_value(text)
@@ -271,13 +312,28 @@ class ReadOnlyUsbServiceProbe:
         for item in payload:
             if not isinstance(item, dict):
                 continue
-            pnp_id = str(item.get("PNPDeviceID", ""))
-            name = str(item.get("Name", ""))
+            pnp_id = str(item.get("PNPDeviceID") or item.get("InstanceId") or "")
+            name = str(item.get("Name") or item.get("FriendlyName") or "")
+            present_value = item.get("Present", True)
+            present = (
+                present_value
+                if isinstance(present_value, bool)
+                else str(present_value).strip().lower()
+                not in {"0", "false", "no", "off", "none"}
+            )
+            try:
+                error_code = int(item.get("ConfigManagerErrorCode", 0) or 0)
+            except (TypeError, ValueError):
+                error_code = 0
+            if not present or error_code == 45:
+                continue
             result.append(
                 {
                     "pnp_device_id": pnp_id,
                     "name": name,
                     "status": str(item.get("Status", "")),
+                    "present": "true",
+                    "config_error_code": str(error_code),
                     "usb_vid": cls._extract_token(pnp_id, "VID"),
                     "usb_pid": cls._extract_token(pnp_id, "PID"),
                     "port": cls._extract_com_port(name),

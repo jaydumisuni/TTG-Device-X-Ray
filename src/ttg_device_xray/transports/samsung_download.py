@@ -14,10 +14,9 @@ class SamsungDownloadProbe(ReadOnlyUsbServiceProbe):
     env_prefix = "TTG_SAMSUNG_DOWNLOAD"
     default_mode = "download"
     device_regex = (
-        r"(?i)(VID_04E8&PID_[0-9A-F]{4}|Samsung.*(Download|Odin|Gadget Serial|"
-        r"Mobile USB Modem))"
+        r"(?i)(VID_04E8&PID_685D|Samsung.*(?:Download|Odin|Gadget Serial))"
     )
-    linux_usb_regex = r"(?i)(04e8:[0-9a-f]{4}|samsung.*(download|odin|gadget))"
+    linux_usb_regex = r"(?i)(04e8:685d|samsung.*(?:download|odin|gadget serial))"
 
     def _mode_for_endpoint(self, endpoint: dict[str, str]) -> str:
         text = " ".join(
@@ -27,7 +26,12 @@ class SamsungDownloadProbe(ReadOnlyUsbServiceProbe):
                 endpoint.get("usb_path", ""),
             ]
         ).lower()
-        if any(token in text for token in ("download", "odin", "gadget serial")):
+        exact_download_pid = endpoint.get("usb_vid", "").upper() == "04E8" and endpoint.get(
+            "usb_pid", ""
+        ).upper() == "685D"
+        if exact_download_pid or any(
+            token in text for token in ("download", "odin", "gadget serial")
+        ):
             return "download"
         return "samsung-usb-candidate"
 
@@ -41,3 +45,11 @@ class SamsungDownloadProbe(ReadOnlyUsbServiceProbe):
             "odin_command_sent": False,
             "read_only": True,
         }
+
+    def _endpoint_confirms_transport(
+        self,
+        endpoint: dict[str, str],
+        mode: str,
+        capabilities: dict[str, Any],
+    ) -> bool:
+        return bool(capabilities.get("download_mode_confirmed_by_usb"))

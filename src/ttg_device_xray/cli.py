@@ -4,12 +4,14 @@ import argparse
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 from .analyzers.ipsw import IpswAnalysisError, write_ipsw_report
 from .bundle_seal import seal_bundle
 from .command import CommandRunner
 from .enhanced_pipeline import EnhancedXRayPipeline
 from .hunter_bridge import HunterBridge, HunterDelivery
+from .models import ScanBundle, TransportObservation
 from .pipeline import write_bundle
 from .platform_tools import PlatformToolsRunner
 from .profile_loader import ProfileLoader
@@ -65,6 +67,52 @@ def _helper_status(prefix: str) -> dict[str, bool]:
             os.environ.get(f"{prefix}_EVIDENCE_FILE", "").strip()
         ),
     }
+
+
+def _diagnostic_observation(observation: TransportObservation) -> dict[str, Any]:
+    identifiers = observation.identifiers
+    capabilities = observation.capabilities
+    return {
+        "transport": observation.transport.value,
+        "mode": observation.mode,
+        "available": observation.available,
+        "connected": observation.connected,
+        "usb_vid": str(identifiers.get("usb_vid", "")),
+        "usb_pid": str(identifiers.get("usb_pid", "")),
+        "pnp_present": capabilities.get("pnp_present"),
+        "pnp_status": str(capabilities.get("pnp_status", "")),
+        "transport_confirmed": capabilities.get("transport_confirmed"),
+        "helper_configured": bool(capabilities.get("helper_configured", False)),
+        "partition_count": len(observation.partitions),
+        "warning_count": len(observation.warnings),
+    }
+
+
+def _diagnostic_candidates(bundle: ScanBundle) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for index, candidate in enumerate(bundle.candidates, start=1):
+        identity = candidate.identity
+        summaries.append(
+            {
+                "candidate_index": index,
+                "link_confidence": candidate.link_confidence,
+                "identity": {
+                    "platform": identity.platform,
+                    "brand": identity.brand,
+                    "manufacturer": identity.manufacturer,
+                    "marketing_model": identity.marketing_model,
+                    "internal_model": identity.internal_model,
+                    "board": identity.board,
+                    "chipset": identity.chipset,
+                    "active_mode": identity.active_mode,
+                },
+                "observations": [
+                    _diagnostic_observation(observation)
+                    for observation in candidate.observations
+                ],
+            }
+        )
+    return summaries
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -192,6 +240,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "scan_id": bundle.scan_id,
                 "candidate_count": len(bundle.candidates),
+                "candidate_summaries": _diagnostic_candidates(bundle),
                 "selected_candidate_id": bundle.selected_candidate_id,
                 "verdict": bundle.certification.verdict.value,
                 "certification_scope": "DEVICE_IDENTITY_EVIDENCE",

@@ -14,10 +14,13 @@ class SpdDownloadProbe(ReadOnlyUsbServiceProbe):
     env_prefix = "TTG_SPD"
     default_mode = "download"
     device_regex = (
-        r"(?i)(VID_1782&PID_[0-9A-F]{4}|Spreadtrum|Unisoc|SCI USB2Serial|"
-        r"SPRD.*Download|USB Download Gadget)"
+        r"(?i)(SCI USB2Serial|SPRD.*(?:Download|Diagnostic)|USB Download Gadget|"
+        r"Spreadtrum.*(?:Download|Diagnostic)|Unisoc.*(?:Download|Diagnostic))"
     )
-    linux_usb_regex = r"(?i)(1782:[0-9a-f]{4}|spreadtrum|unisoc|sprd)"
+    linux_usb_regex = (
+        r"(?i)(sci usb2serial|sprd.*(?:download|diagnostic)|usb download gadget|"
+        r"spreadtrum.*(?:download|diagnostic)|unisoc.*(?:download|diagnostic))"
+    )
 
     def _mode_for_endpoint(self, endpoint: dict[str, str]) -> str:
         text = " ".join(
@@ -27,7 +30,15 @@ class SpdDownloadProbe(ReadOnlyUsbServiceProbe):
                 endpoint.get("usb_path", ""),
             ]
         ).lower()
-        if any(token in text for token in ("download", "sci usb2serial", "spreadtrum", "unisoc")):
+        if any(
+            token in text
+            for token in (
+                "download",
+                "sci usb2serial",
+                "usb download gadget",
+                "diagnostic",
+            )
+        ):
             return "download"
         return "spd-usb-candidate"
 
@@ -40,3 +51,11 @@ class SpdDownloadProbe(ReadOnlyUsbServiceProbe):
             "fdl_sent": False,
             "read_only": True,
         }
+
+    def _endpoint_confirms_transport(
+        self,
+        endpoint: dict[str, str],
+        mode: str,
+        capabilities: dict[str, Any],
+    ) -> bool:
+        return bool(capabilities.get("download_mode_confirmed_by_usb"))
