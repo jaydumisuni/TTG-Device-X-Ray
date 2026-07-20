@@ -53,27 +53,10 @@ jobs:
         run: python -m ruff check .
 
       - name: Build and validate package metadata
-        id: package
-        continue-on-error: true
         run: |
-          set -o pipefail
-          {
-            python -m build --outdir dist-check
-            python -m twine check dist-check/*
-          } 2>&1 | tee package-report.txt
-
-      - name: Upload package report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: package-report
-          path: package-report.txt
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Fail when package validation fails
-        if: steps.package.outcome != 'success'
-        run: exit 1
+          python -m build --outdir dist-check
+          python -m twine check dist-check/*
+          python scripts/validate_distribution.py dist-check
 
   tests:
     name: Python ${{ matrix.python-version }} tests
