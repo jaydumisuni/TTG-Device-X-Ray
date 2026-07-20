@@ -11,6 +11,7 @@ from .command import CommandRunner
 from .enhanced_pipeline import EnhancedXRayPipeline
 from .hunter_bridge import HunterBridge, HunterDelivery
 from .pipeline import write_bundle
+from .platform_tools import PlatformToolsRunner
 from .profile_loader import ProfileLoader
 from .transports.adb import AdbProbe
 from .transports.apple import AppleProbe
@@ -68,10 +69,15 @@ def _helper_status(prefix: str) -> dict[str, bool]:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     runner = CommandRunner()
+    platform_tools = PlatformToolsRunner(runner)
 
     if args.command == "doctor":
         tools = {
-            name: runner.exists(name)
+            name: (
+                platform_tools.exists(name)
+                if name in {"adb", "fastboot"}
+                else runner.exists(name)
+            )
             for name in (
                 "adb",
                 "fastboot",
@@ -141,8 +147,8 @@ def main(argv: list[str] | None = None) -> int:
 
     pipeline = EnhancedXRayPipeline(
         probes=[
-            AdbProbe(runner),
-            FastbootProbe(runner),
+            AdbProbe(platform_tools),
+            FastbootProbe(platform_tools),
             MtkMetaProbe(runner),
             QualcommEdlProbe(runner),
             SpdDownloadProbe(runner),
