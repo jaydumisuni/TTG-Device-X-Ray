@@ -8,6 +8,7 @@ from typing import Any
 class TransportKind(str, Enum):
     ADB = "adb"
     FASTBOOT = "fastboot"
+    MTK_META = "mtk_meta"
     APPLE_NORMAL = "apple_normal"
     APPLE_RECOVERY = "apple_recovery"
     APPLE_DFU = "apple_dfu"
