@@ -2,12 +2,14 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*.*.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag to release, for example v0.4.0
+        description: Release version, for example v0.4.0
         required: true
         type: string
 
@@ -18,25 +20,24 @@ permissions:
   artifact-metadata: write
 
 concurrency:
-  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  group: release-${{ github.ref }}-${{ inputs.tag || 'automatic' }}
   cancel-in-progress: false
 
 env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PYTHONDONTWRITEBYTECODE: "1"
   PYTHONUTF8: "1"
-  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
-  release-gate:
-    name: Release Gate
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  release:
+    name: Build and publish Windows release
+    runs-on: windows-latest
+    timeout-minutes: 35
+
     steps:
-      - name: Check out the release tag
+      - name: Check out source
         uses: actions/checkout@v6
         with:
-          ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
       - name: Set up Python
@@ -46,47 +47,69 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Install project and release tools
+      - name: Resolve release tag
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $tag = $env:GITHUB_REF_NAME
+          } elseif ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
+            $tag = "${{ inputs.tag }}"
+          } else {
+            $version = python -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
+            $tag = "v$version"
+          }
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Release tag: $tag"
+
+      - name: Install project and packaging tools
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
+          python -m pip install "PySide6>=6.8,<7" "PyInstaller>=6.11,<7"
 
-      - name: Run the complete local quality gate
+      - name: Run complete quality gate
+        shell: pwsh
         run: python scripts/run_local_checks.py
 
-      - name: Verify tag and package versions
-        run: python scripts/verify_release_version.py "$RELEASE_TAG"
+      - name: Verify release version
+        shell: pwsh
+        run: python scripts/verify_release_version.py "$env:RELEASE_TAG"
 
-      - name: Build release artifacts
+      - name: Build Python distributions
+        shell: pwsh
         run: |
-          rm -rf dist release-windows
+          Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
           python -m build
-          python -m twine check dist/*
+          $packages = (Get-ChildItem dist -File).FullName
+          python -m twine check $packages
 
-      - name: Build one-click Windows bundle
-        shell: bash
+      - name: Validate Qt entry point
+        shell: pwsh
         run: |
-          mkdir -p release-windows
-          cp packaging/windows/RUN_XRAY_FOR_TTG_UNLOCK.bat release-windows/
-          cp dist/*.whl release-windows/
-          cat > release-windows/README.txt <<'EOF'
-          TTG DEVICE X-RAY - WINDOWS RELEASE
+          python -c "from ttg_device_xray.qt_app import default_output_directory; print(default_output_directory())"
 
-          1. Extract the complete ZIP.
-          2. Copy the extracted folder into TTG_UNLOCK_V3, or place it beside TTG_UNLOCK_V3.
-          3. Double-click RUN_XRAY_FOR_TTG_UNLOCK.bat.
-          4. The launcher creates a private runtime, installs the bundled X-Ray package and dependencies,
-             then writes the device scan bundle into TTG_UNLOCK_V3\scans.
-          5. Run TTG UNLOCK V3 again.
-
-          Internet is only needed when pip must obtain third-party Python dependencies.
-          The TTG Device X-Ray wheel itself is included in this ZIP.
-          EOF
-          (cd release-windows && zip -r "../TTG-Device-XRay-${RELEASE_TAG}-Windows.zip" .)
+      - name: Build standalone Qt executable
+        shell: pwsh
+        run: |
+          & .\packaging\windows\build_exe.ps1 -OutputDir "dist-exe"
+          $source = Join-Path $PWD "dist-exe\TTG-Device-XRay.exe"
+          $asset = "TTG-Device-XRay-$env:RELEASE_TAG-Windows.exe"
+          Move-Item -Force $source (Join-Path $PWD $asset)
+          "EXE_ASSET=$asset" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Get-Item $asset | Format-List Name,Length,LastWriteTime
 
       - name: Generate checksums
+        shell: pwsh
         run: |
-          sha256sum dist/* "TTG-Device-XRay-${RELEASE_TAG}-Windows.zip" > SHA256SUMS
+          $files = @(Get-ChildItem dist -File)
+          $files += Get-Item $env:EXE_ASSET
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)"
+          }
+          $lines | Set-Content -Encoding ascii SHA256SUMS
+          Get-Content SHA256SUMS
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v7
@@ -94,7 +117,7 @@ jobs:
           name: ttg-device-xray-${{ env.RELEASE_TAG }}
           path: |
             dist/*
-            TTG-Device-XRay-${{ env.RELEASE_TAG }}-Windows.zip
+            TTG-Device-XRay-v*-Windows.exe
             SHA256SUMS
           if-no-files-found: error
           retention-days: 30
@@ -104,17 +127,37 @@ jobs:
         with:
           subject-path: |
             dist/*
-            TTG-Device-XRay-${{ env.RELEASE_TAG }}-Windows.zip
+            TTG-Device-XRay-v*-Windows.exe
           create-storage-record: false
 
-      - name: Create GitHub release
+      - name: Create or update GitHub release
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$RELEASE_TAG" \
-            dist/* \
-            "TTG-Device-XRay-${RELEASE_TAG}-Windows.zip" \
-            SHA256SUMS \
-            --generate-notes \
-            --verify-tag \
-            --title "TTG Device X-Ray $RELEASE_TAG"
+          $assets = @((Get-ChildItem dist -File).FullName)
+          $assets += (Get-Item $env:EXE_ASSET).FullName
+          $assets += (Get-Item "SHA256SUMS").FullName
+
+          gh release view $env:RELEASE_TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release exists; replacing its generated assets."
+            gh release upload $env:RELEASE_TAG $assets --clobber
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            $arguments = @(
+              "release", "create", $env:RELEASE_TAG
+            ) + $assets + @(
+              "--generate-notes",
+              "--title", "TTG Device X-Ray $env:RELEASE_TAG"
+            )
+
+            if ($env:GITHUB_REF_TYPE -eq "tag") {
+              $arguments += "--verify-tag"
+            } else {
+              $arguments += @("--target", $env:GITHUB_SHA)
+            }
+
+            & gh @arguments
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
