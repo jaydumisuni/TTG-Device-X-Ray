@@ -40,8 +40,22 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Run deterministic repository checks
-        run: python scripts/run_local_checks.py --skip-tests
+      - name: Validate profiles
+        run: python scripts/validate_profiles.py
+
+      - name: Validate replay fixtures
+        run: python scripts/validate_fixtures.py
+
+      - name: Enforce read-only command boundary
+        run: python scripts/check_read_only.py
+
+      - name: Run Ruff
+        run: python -m ruff check .
+
+      - name: Build and validate package metadata
+        run: |
+          python -m build --outdir dist-check
+          python -m twine check dist-check/*
 
   tests:
     name: Python ${{ matrix.python-version }} tests
