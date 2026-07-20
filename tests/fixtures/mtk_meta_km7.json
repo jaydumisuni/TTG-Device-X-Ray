@@ -1,0 +1,60 @@
+{
+  "connected": true,
+  "mode": "meta",
+  "identifiers": {
+    "brand": "TECNO",
+    "manufacturer": "TECNO MOBILE LIMITED",
+    "model_code": "KM7",
+    "device": "KM7",
+    "board": "k65v1_64_bsp",
+    "chipset": "mt6765",
+    "android_version": "11",
+    "build_id": "KM7-H6128",
+    "serial": "FIXTURE-MTK-KM7",
+    "storage_type": "eMMC",
+    "storage_model": "HYNIX-FIXTURE",
+    "storage_capacity_bytes": "64000000000"
+  },
+  "capabilities": {
+    "read_only": true,
+    "protocol_query_completed": true,
+    "partition_map_read": true,
+    "storage": {
+      "type": "eMMC",
+      "model": "HYNIX-FIXTURE",
+      "capacity_bytes": 64000000000,
+      "logical_block_size": 512
+    }
+  },
+  "partitions": [
+    {
+      "name": "proinfo",
+      "start_sector": 8192,
+      "sector_count": 6144,
+      "logical_block_size": 512,
+      "size_bytes": 3145728
+    },
+    {
+      "name": "nvram",
+      "start_sector": 16384,
+      "sector_count": 10240,
+      "logical_block_size": 512,
+      "size_bytes": 5242880
+    },
+    {
+      "name": "nvdata",
+      "start_sector": 32768,
+      "sector_count": 65536,
+      "logical_block_size": 512,
+      "size_bytes": 33554432
+    },
+    {
+      "name": "super",
+      "start_sector": 1048576,
+      "sector_count": 8388608,
+      "logical_block_size": 512,
+      "size_bytes": 4294967296
+    }
+  ],
+  "warnings": []
+}
