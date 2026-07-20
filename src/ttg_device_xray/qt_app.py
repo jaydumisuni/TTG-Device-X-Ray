@@ -8,7 +8,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSettings, QThread, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, QSettings, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -26,7 +26,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import __version__
 from .cli import main as cli_main
+from .dev_updater import (
+    _download,
+    _schedule_replacement,
+    check_for_update,
+    package_version_to_channel,
+)
 from .github_reporter import (
     DEFAULT_REPORT_REPO,
     github_cli_status,
@@ -127,6 +134,53 @@ def configure_transport_path(output_directory: Path) -> list[Path]:
     return discovered
 
 
+class UpdateWorker(QObject):
+    status = Signal(str)
+    finished = Signal(bool, str)
+
+    @Slot()
+    def run(self) -> None:
+        current = package_version_to_channel(__version__)
+        try:
+            self.status.emit(
+                f"Dev channel: Checking tools-test-repo… Current version {current}."
+            )
+            check = check_for_update()
+            remote = check.remote_version or "not available"
+            if not check.available or check.manifest is None:
+                self.finished.emit(
+                    False,
+                    f"Dev channel: {check.message}. Current {check.current_version}; "
+                    f"registry {remote}.",
+                )
+                return
+
+            self.status.emit(
+                f"Dev channel: Update {check.remote_version} found. Downloading privately…"
+            )
+            replacement = _download(check.manifest)
+            self.status.emit(
+                f"Dev channel: Update {check.remote_version} downloaded and SHA-256 verified. "
+                "Preparing replacement…"
+            )
+            scheduled = _schedule_replacement(replacement, check.manifest)
+            if not scheduled:
+                self.finished.emit(
+                    False,
+                    "Dev channel: Update was verified but replacement could not be scheduled.",
+                )
+                return
+            self.finished.emit(
+                True,
+                f"Dev channel: Installing {check.remote_version}. X-Ray will restart automatically.",
+            )
+        except BaseException as exc:
+            self.finished.emit(
+                False,
+                f"Dev channel: Update check failed safely — {type(exc).__name__}: {exc}",
+            )
+
+
 class ScanWorker(QObject):
     status = Signal(str)
     finished = Signal(int, str, str)
@@ -211,14 +265,17 @@ class MainWindow(QMainWindow):
         self.settings = QSettings(ORG_NAME, APP_NAME)
         self.thread: QThread | None = None
         self.worker: ScanWorker | None = None
+        self.update_thread: QThread | None = None
+        self.update_worker: UpdateWorker | None = None
         self.last_issue_url = ""
         self.setWindowTitle(f"{APP_NAME} — Read-Only Device Intelligence")
-        self.setMinimumSize(760, 610)
-        self.resize(900, 700)
+        self.setMinimumSize(760, 650)
+        self.resize(900, 740)
         self._build_ui()
         self._apply_style()
         self._load_output_directory()
         self._refresh_readiness()
+        QTimer.singleShot(150, self._start_update_check)
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -239,6 +296,22 @@ class MainWindow(QMainWindow):
         layout.addWidget(brand)
         layout.addWidget(title)
         layout.addWidget(subtitle)
+
+        update_card = QFrame()
+        update_card.setObjectName("UpdateCard")
+        update_layout = QHBoxLayout(update_card)
+        update_layout.setContentsMargins(16, 12, 16, 12)
+        self.update_label = QLabel(
+            f"Dev channel: Waiting to check — current "
+            f"{package_version_to_channel(__version__)}."
+        )
+        self.update_label.setObjectName("UpdateStatus")
+        self.update_label.setWordWrap(True)
+        self.update_button = QPushButton("Check for Updates")
+        self.update_button.clicked.connect(self._start_update_check)
+        update_layout.addWidget(self.update_label, 1)
+        update_layout.addWidget(self.update_button)
+        layout.addWidget(update_card)
 
         status_card = QFrame()
         status_card.setObjectName("Card")
@@ -307,8 +380,11 @@ class MainWindow(QMainWindow):
             QLabel#Subtitle { color: #a9b7c9; font-size: 13px; }
             QLabel#SectionTitle { color: white; font-size: 13px; font-weight: 700; }
             QLabel#Status, QLabel#Result { color: #b9c9dc; font-size: 13px; }
+            QLabel#UpdateStatus { color: #d7f5ff; font-size: 13px; font-weight: 700; }
             QFrame#Card { background: #111823; border: 1px solid #223145;
                           border-radius: 10px; }
+            QFrame#UpdateCard { background: #0d2631; border: 1px solid #1f7898;
+                                border-radius: 10px; }
             QLineEdit, QTextEdit { background: #0c121b; border: 1px solid #29394f;
                                    border-radius: 7px; padding: 9px; color: #eaf2ff; }
             QPushButton { background: #1a2635; border: 1px solid #334a64;
@@ -352,6 +428,46 @@ class MainWindow(QMainWindow):
         self.readiness_label.setText(
             f"{adb_text}\n{unlock_text}\n{github_text}\nOutput: {output}"
         )
+
+    @Slot()
+    def _start_update_check(self) -> None:
+        if self.update_thread is not None:
+            return
+        self.update_button.setEnabled(False)
+        self.update_label.setText(
+            f"Dev channel: Checking tools-test-repo… Current "
+            f"{package_version_to_channel(__version__)}."
+        )
+        self.log.append("Checking private development channel for a verified update…")
+        self.update_thread = QThread(self)
+        self.update_worker = UpdateWorker()
+        self.update_worker.moveToThread(self.update_thread)
+        self.update_thread.started.connect(self.update_worker.run)
+        self.update_worker.status.connect(self._update_status)
+        self.update_worker.finished.connect(self._update_finished)
+        self.update_worker.finished.connect(self.update_thread.quit)
+        self.update_thread.finished.connect(self.update_worker.deleteLater)
+        self.update_thread.finished.connect(self.update_thread.deleteLater)
+        self.update_thread.start()
+
+    @Slot(str)
+    def _update_status(self, message: str) -> None:
+        self.update_label.setText(message)
+        self.log.append(message)
+
+    @Slot(bool, str)
+    def _update_finished(self, restart_scheduled: bool, message: str) -> None:
+        self.update_label.setText(message)
+        self.log.append(message)
+        self.update_worker = None
+        self.update_thread = None
+        if restart_scheduled:
+            self.scan_button.setEnabled(False)
+            self.update_button.setEnabled(False)
+            self.result_label.setText("Verified development update is being installed…")
+            QTimer.singleShot(350, QApplication.instance().quit)
+        else:
+            self.update_button.setEnabled(True)
 
     @Slot()
     def _browse_output(self) -> None:
