@@ -45,7 +45,7 @@ def test_multiple_android_devices_are_separate_candidates_and_block_selection():
     assert bundle.identity.platform == "unknown"
 
 
-def test_apple_modes_link_by_hardware_without_collapsing_identifier_types():
+def _apple_pair(correlation_token=""):
     normal = TransportObservation(
         transport=TransportKind.APPLE_NORMAL,
         available=True,
@@ -59,6 +59,7 @@ def test_apple_modes_link_by_hardware_without_collapsing_identifier_types():
             "ChipID": "0x8015",
             "BoardId": "0x0E",
         },
+        capabilities={"correlation_token": correlation_token} if correlation_token else {},
     )
     recovery = TransportObservation(
         transport=TransportKind.APPLE_RECOVERY,
@@ -72,8 +73,30 @@ def test_apple_modes_link_by_hardware_without_collapsing_identifier_types():
             "CPID": "0x8015",
             "BDID": "0x0e",
         },
+        capabilities={"correlation_token": correlation_token} if correlation_token else {},
+    )
+    return normal, recovery
+
+
+def test_apple_hardware_only_match_is_a_proposal_not_a_merge():
+    normal, recovery = _apple_pair()
+    bundle = XRayPipeline([StaticProbe([normal, recovery])]).scan()
+
+    assert len(bundle.candidates) == 2
+    assert bundle.selected_candidate_id is None
+    assert bundle.certification.verdict.value == "UNSAFE"
+    assert all(
+        any(
+            item["method"] == "apple_hardware_link_proposal"
+            and item["merged"] is False
+            for item in candidate.link_evidence
+        )
+        for candidate in bundle.candidates
     )
 
+
+def test_apple_modes_link_with_session_proof_without_collapsing_identifiers():
+    normal, recovery = _apple_pair("shop-session-123")
     bundle = XRayPipeline([StaticProbe([normal, recovery])]).scan()
 
     assert len(bundle.candidates) == 1
@@ -82,6 +105,6 @@ def test_apple_modes_link_by_hardware_without_collapsing_identifier_types():
     assert bundle.identity.ecid == "123456789"
     assert bundle.identity.serial == ""
     assert any(
-        item["method"] == "apple_hardware_correlation"
+        item["method"] == "apple_session_correlation"
         for item in bundle.candidates[0].link_evidence
     )
