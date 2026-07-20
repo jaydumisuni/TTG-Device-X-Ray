@@ -14,15 +14,9 @@ from ..models import TransportKind, TransportObservation
 class MtkMetaProbe:
     """Read-only MTK Preloader/META transport probe.
 
-    The probe has two layers:
-
-    1. Deterministic Windows PnP detection for MediaTek VID 0E8D, including
-       Preloader PID 2000 and Kernel META PID 2007.
-    2. An optional external D2e/TSM helper that performs the already-proven
-       DLL session chain and returns read-only JSON evidence.
-
-    The helper is configured with TTG_MTK_META_HELPER or an evidence fixture
-    can be supplied with TTG_MTK_META_EVIDENCE_FILE.
+    Windows PnP identifies MediaTek Preloader PID 2000 and Kernel META PID
+    2007. The already-proven D2e/TSM DLL chain plugs in through an optional
+    helper command that returns structured read-only evidence.
     """
 
     name = "mtk_meta"
@@ -52,19 +46,21 @@ class MtkMetaProbe:
                 )
             ]
 
-        command = [
-            shell,
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            (
-                "$items = Get-CimInstance Win32_PnPEntity | "
-                "Where-Object { $_.PNPDeviceID -match 'VID_0E8D&PID_(2000|2007)' } | "
-                "Select-Object Name,PNPDeviceID,Status; "
-                "if ($items) { $items | ConvertTo-Json -Compress }"
-            ),
-        ]
-        pnp = self.runner.run(command, timeout=30)
+        pnp = self.runner.run(
+            [
+                shell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                (
+                    "$items = Get-CimInstance Win32_PnPEntity | "
+                    "Where-Object { $_.PNPDeviceID -match 'VID_0E8D&PID_(2000|2007)' } | "
+                    "Select-Object Name,PNPDeviceID,Status; "
+                    "if ($items) { $items | ConvertTo-Json -Compress }"
+                ),
+            ],
+            timeout=30,
+        )
         devices = self._parse_pnp_json(pnp.stdout)
         if not devices:
             return [
@@ -85,35 +81,31 @@ class MtkMetaProbe:
             vid = self._extract_token(pnp_id, "VID") or self.VID
             port = self._extract_com_port(name)
             mode = self._mode_for_pid(pid)
-            base_ids = {
+            helper_result, helper_command, helper_warning = self._run_helper(
+                port=port,
+                pid=pid,
+                pnp_device_id=pnp_id,
+            )
+            identifiers = {
                 "usb_vid": vid,
                 "usb_pid": pid,
                 "pnp_device_id": pnp_id,
                 "usb_name": name,
                 "port": port,
                 "serial": self._extract_usb_serial(pnp_id),
+                **self._string_dict(helper_result.get("identifiers", {})),
             }
-            helper_result, helper_command, helper_warning = self._run_helper(
-                port=port,
-                pid=pid,
-                pnp_device_id=pnp_id,
-            )
-            identifiers = {**base_ids, **self._string_dict(helper_result.get("identifiers", {}))}
+            helper_capabilities = self._dict(helper_result.get("capabilities", {}))
             capabilities = {
+                **helper_capabilities,
                 "read_only": True,
                 "preloader_detected": pid == self.PRELOADER_PID,
                 "kernel_meta_detected": pid == self.META_PID,
                 "helper_configured": helper_command is not None,
-                **self._dict(helper_result.get("capabilities", {})),
             }
-            partitions = self._normalize_partitions(helper_result.get("partitions", []))
-            warnings = []
+            warnings = self._warnings(helper_result.get("warnings", []))
             if helper_warning:
-                warnings.append(helper_warning)
-            warnings.extend(str(item) for item in helper_result.get("warnings", []) if item)
-
-            observation_mode = str(helper_result.get("mode", mode)).lower()
-            connected = bool(helper_result.get("connected", True))
+                warnings.insert(0, helper_warning)
             commands = [pnp]
             if helper_command is not None:
                 commands.append(helper_command)
@@ -121,11 +113,13 @@ class MtkMetaProbe:
                 TransportObservation(
                     transport=TransportKind.MTK_META,
                     available=True,
-                    connected=connected,
-                    mode=observation_mode,
+                    connected=bool(helper_result.get("connected", True)),
+                    mode=str(helper_result.get("mode", mode)).lower(),
                     identifiers=identifiers,
                     capabilities=capabilities,
-                    partitions=partitions,
+                    partitions=self._normalize_partitions(
+                        helper_result.get("partitions", [])
+                    ),
                     commands=commands,
                     warnings=warnings,
                 )
@@ -160,6 +154,8 @@ class MtkMetaProbe:
         for item in items:
             if not isinstance(item, dict):
                 continue
+            capabilities = self._dict(item.get("capabilities", {}))
+            capabilities["read_only"] = True
             observations.append(
                 TransportObservation(
                     transport=TransportKind.MTK_META,
@@ -167,9 +163,9 @@ class MtkMetaProbe:
                     connected=bool(item.get("connected", True)),
                     mode=str(item.get("mode", "meta")).lower(),
                     identifiers=self._string_dict(item.get("identifiers", {})),
-                    capabilities={"read_only": True, **self._dict(item.get("capabilities", {}))},
+                    capabilities=capabilities,
                     partitions=self._normalize_partitions(item.get("partitions", [])),
-                    warnings=[str(value) for value in item.get("warnings", [])],
+                    warnings=self._warnings(item.get("warnings", [])),
                 )
             )
         return observations or [
@@ -196,7 +192,10 @@ class MtkMetaProbe:
                 ),
             )
         try:
-            command = [token.strip('"') for token in shlex.split(raw, posix=os.name != "nt")]
+            command = [
+                token.strip('"')
+                for token in shlex.split(raw, posix=os.name != "nt")
+            ]
         except ValueError as exc:
             return {}, None, f"Invalid TTG_MTK_META_HELPER command: {exc}"
         command.extend(
@@ -225,12 +224,7 @@ class MtkMetaProbe:
 
     @staticmethod
     def _parse_pnp_json(text: str) -> list[dict[str, Any]]:
-        if not text.strip():
-            return []
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            return []
+        payload = MtkMetaProbe._extract_json_value(text)
         if isinstance(payload, dict):
             return [payload]
         if isinstance(payload, list):
@@ -238,23 +232,35 @@ class MtkMetaProbe:
         return []
 
     @staticmethod
-    def _extract_json_object(text: str) -> dict[str, Any] | None:
+    def _extract_json_value(text: str) -> Any | None:
+        stripped = text.strip()
+        if not stripped:
+            return None
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
         for line in reversed([line.strip() for line in text.splitlines() if line.strip()]):
             try:
-                payload = json.loads(line)
+                return json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(payload, dict):
-                return payload
-        start = text.find("{")
-        end = text.rfind("}")
-        if start >= 0 and end > start:
-            try:
-                payload = json.loads(text[start : end + 1])
-            except json.JSONDecodeError:
-                return None
-            return payload if isinstance(payload, dict) else None
-        return None
+        start_candidates = [index for index in (text.find("{"), text.find("[")) if index >= 0]
+        if not start_candidates:
+            return None
+        start = min(start_candidates)
+        end = max(text.rfind("}"), text.rfind("]"))
+        if end <= start:
+            return None
+        try:
+            return json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+
+    @staticmethod
+    def _extract_json_object(text: str) -> dict[str, Any] | None:
+        payload = MtkMetaProbe._extract_json_value(text)
+        return payload if isinstance(payload, dict) else None
 
     @staticmethod
     def _extract_token(pnp_id: str, name: str) -> str:
@@ -269,7 +275,7 @@ class MtkMetaProbe:
     @staticmethod
     def _extract_usb_serial(pnp_id: str) -> str:
         tail = pnp_id.rsplit("\\", 1)[-1]
-        return "" if "&" in tail and tail.startswith("5&") else tail
+        return "" if "&" in tail else tail
 
     @classmethod
     def _mode_for_pid(cls, pid: str) -> str:
@@ -288,6 +294,14 @@ class MtkMetaProbe:
         if not isinstance(value, dict):
             return {}
         return {str(key): str(item) for key, item in value.items() if item is not None}
+
+    @staticmethod
+    def _warnings(value: Any) -> list[str]:
+        if isinstance(value, str):
+            return [value] if value else []
+        if isinstance(value, list):
+            return [str(item) for item in value if item]
+        return []
 
     @staticmethod
     def _risk(name: str) -> str:
@@ -313,6 +327,19 @@ class MtkMetaProbe:
             return "sensitive"
         return "normal"
 
+    @staticmethod
+    def _coerce_int(value: Any) -> int:
+        text = str(value).strip()
+        if not text:
+            return 0
+        try:
+            return int(text, 0)
+        except ValueError:
+            try:
+                return int(text, 10)
+            except ValueError:
+                return 0
+
     @classmethod
     def _normalize_partitions(cls, value: Any) -> list[dict[str, Any]]:
         if not isinstance(value, list):
@@ -330,7 +357,8 @@ class MtkMetaProbe:
             item.setdefault("source", "mtk-meta-helper")
             item.setdefault("risk", cls._risk(name))
             item.setdefault(
-                "slot", "a" if name.endswith("_a") else "b" if name.endswith("_b") else ""
+                "slot",
+                "a" if name.endswith("_a") else "b" if name.endswith("_b") else "",
             )
             for key in (
                 "size_bytes",
@@ -339,9 +367,6 @@ class MtkMetaProbe:
                 "logical_block_size",
             ):
                 if key in item:
-                    try:
-                        item[key] = int(str(item[key]), 0)
-                    except ValueError:
-                        item[key] = 0
+                    item[key] = cls._coerce_int(item[key])
             result.append(item)
         return sorted(result, key=lambda item: str(item.get("name", "")))
