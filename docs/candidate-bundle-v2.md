@@ -23,7 +23,7 @@ PROBE
 
 Observations with the same strong identifier may be grouped. Android serials, Apple UDIDs, Apple serial numbers and Apple ECIDs remain distinct identifier types.
 
-Apple normal/recovery observations may be linked through corroborating ProductType, HardwareModel, CPID and BDID evidence. The evidence and link confidence are recorded. ECID is never rewritten as a serial number.
+Apple ProductType, HardwareModel, CPID and BDID agreement creates a cross-mode link proposal with recorded confidence. Hardware attributes alone do not merge candidates because two different phones of the same model can match them. Automatic normal/recovery grouping also requires a shared scan/session correlation token or a same-type strong identifier. ECID is never rewritten as a serial number.
 
 When more than one candidate is present, the workstation-level result is `UNSAFE` with `MULTIPLE_DEVICE_CANDIDATES`. Each candidate still receives its own identity, firmware, storage, challenge and certification records, but no repair profile is selected until a single-device scan exists.
 
