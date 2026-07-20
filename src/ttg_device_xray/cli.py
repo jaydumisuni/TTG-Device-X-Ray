@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from .analyzers.ipsw import IpswAnalysisError, write_ipsw_report
 from .command import CommandRunner
-from .pipeline import XRayPipeline, write_bundle
+from .enhanced_pipeline import EnhancedXRayPipeline
+from .pipeline import write_bundle
 from .transports.adb import AdbProbe
 from .transports.apple import AppleProbe
 from .transports.fastboot import FastbootProbe
+from .transports.mtk_meta import MtkMetaProbe
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,9 +40,33 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "doctor":
         tools = {
             name: runner.exists(name)
-            for name in ("adb", "fastboot", "idevice_id", "ideviceinfo", "irecovery")
+            for name in (
+                "adb",
+                "fastboot",
+                "idevice_id",
+                "ideviceinfo",
+                "irecovery",
+                "powershell",
+                "pwsh",
+            )
         }
-        print(json.dumps({"tools": tools}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "tools": tools,
+                    "mtk_meta": {
+                        "helper_configured": bool(
+                            os.environ.get("TTG_MTK_META_HELPER", "").strip()
+                        ),
+                        "evidence_file_configured": bool(
+                            os.environ.get("TTG_MTK_META_EVIDENCE_FILE", "").strip()
+                        ),
+                        "supported_vid_pid": ["0E8D:2000", "0E8D:2007"],
+                    },
+                },
+                indent=2,
+            )
+        )
         return 0
 
     if args.command == "inspect-ipsw":
@@ -51,10 +78,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, indent=2))
         return 0
 
-    pipeline = XRayPipeline(
+    pipeline = EnhancedXRayPipeline(
         probes=[
             AdbProbe(runner),
             FastbootProbe(runner),
+            MtkMetaProbe(runner),
             AppleProbe(runner),
         ]
     )
