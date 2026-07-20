@@ -19,11 +19,6 @@
     "early_health_seconds": 8,
     "keep_rollback": true,
     "require_authenticode": false,
-    "hunter": {
-      "enabled": false,
-      "endpoint": "",
-      "route": "device-xray"
-    },
     "reporting": {
       "enabled": true,
       "github_direct_when_authenticated": true,
