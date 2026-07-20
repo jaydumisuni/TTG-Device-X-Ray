@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ttg-device-xray"
+version = "0.1.0"
+description = "Read-first device intelligence for Android and Apple repair workflows."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [
+  { name = "THETECHGUY DIGITAL SOLUTIONS" }
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.scripts]
+ttg-xray = "ttg_device_xray.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ttg_device_xray"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
