@@ -78,6 +78,58 @@ def _mapping(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _safe_observation(value: Any) -> dict[str, Any]:
+    item = _mapping(value)
+    return {
+        "transport": str(item.get("transport", "")),
+        "mode": str(item.get("mode", "")),
+        "available": bool(item.get("available", False)),
+        "connected": bool(item.get("connected", False)),
+        "usb_vid": str(item.get("usb_vid", ""))[:4],
+        "usb_pid": str(item.get("usb_pid", ""))[:4],
+        "pnp_present": item.get("pnp_present"),
+        "pnp_status": str(item.get("pnp_status", ""))[:40],
+        "transport_confirmed": item.get("transport_confirmed"),
+        "helper_configured": bool(item.get("helper_configured", False)),
+        "partition_count": int(item.get("partition_count", 0) or 0),
+        "warning_count": int(item.get("warning_count", 0) or 0),
+    }
+
+
+def _safe_candidate_summaries(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for raw in value[:12]:
+        item = _mapping(raw)
+        identity = _mapping(item.get("identity"))
+        observations = item.get("observations", [])
+        result.append(
+            {
+                "candidate_index": int(item.get("candidate_index", 0) or 0),
+                "link_confidence": float(item.get("link_confidence", 0.0) or 0.0),
+                "identity": {
+                    "platform": str(identity.get("platform", "unknown")),
+                    "brand": str(identity.get("brand", "")),
+                    "manufacturer": str(identity.get("manufacturer", "")),
+                    "marketing_model": str(identity.get("marketing_model", "")),
+                    "internal_model": str(identity.get("internal_model", "")),
+                    "board": str(identity.get("board", "")),
+                    "chipset": str(identity.get("chipset", "")),
+                    "active_mode": str(identity.get("active_mode", "unknown")),
+                },
+                "observations": [
+                    _safe_observation(observation)
+                    for observation in observations[:12]
+                    if isinstance(observation, dict)
+                ]
+                if isinstance(observations, list)
+                else [],
+            }
+        )
+    return result
+
+
 def safe_summary(summary: dict[str, Any], exit_code: int) -> dict[str, Any]:
     profile = _mapping(summary.get("profile_match"))
     hunter = _mapping(summary.get("hunter_delivery"))
@@ -90,6 +142,9 @@ def safe_summary(summary: dict[str, Any], exit_code: int) -> dict[str, Any]:
         "scan_id": str(summary.get("scan_id", "")),
         "exit_code": int(exit_code),
         "candidate_count": int(summary.get("candidate_count", 0) or 0),
+        "candidate_summaries": _safe_candidate_summaries(
+            summary.get("candidate_summaries")
+        ),
         "selected_candidate_present": bool(summary.get("selected_candidate_id")),
         "verdict": str(summary.get("verdict", "UNKNOWN")),
         "confidence": float(summary.get("confidence", 0.0) or 0.0),
@@ -159,6 +214,7 @@ def diagnostic_fingerprint(safe: dict[str, Any], console_tail: str) -> str:
         "category": diagnostic_category(safe),
         "exit_code": safe.get("exit_code"),
         "candidate_count": safe.get("candidate_count"),
+        "candidate_summaries": safe.get("candidate_summaries", []),
         "verdict": safe.get("verdict"),
         "profile_status": profile.get("status"),
         "reasons": profile.get("reasons", []),
