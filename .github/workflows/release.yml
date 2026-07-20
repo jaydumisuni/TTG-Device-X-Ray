@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release, for example v0.4.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUTF8: "1"
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  release-gate:
+    name: Release Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install project and release tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run the complete local quality gate
+        run: python scripts/run_local_checks.py
+
+      - name: Verify tag and package versions
+        run: python scripts/verify_release_version.py "$RELEASE_TAG"
+
+      - name: Build release artifacts
+        run: |
+          rm -rf dist
+          python -m build
+          python -m twine check dist/*
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > ../SHA256SUMS
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ttg-device-xray-${{ env.RELEASE_TAG }}
+          path: |
+            dist/*
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attest release provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/*
+          create-storage-record: false
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            dist/* \
+            SHA256SUMS \
+            --generate-notes \
+            --verify-tag \
+            --title "TTG Device X-Ray $RELEASE_TAG"
