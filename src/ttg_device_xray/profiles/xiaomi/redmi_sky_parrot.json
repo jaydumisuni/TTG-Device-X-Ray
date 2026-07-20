@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "profile_id": "android:redmi:sky:parrot",
+  "aliases": [
+    "android:xiaomi:sky:parrot",
+    "android:redmi:23076ra4bc:parrot"
+  ],
+  "stage": "CANDIDATE",
+  "approval": "candidate",
+  "vendor_family": "Xiaomi",
+  "brands": [
+    "Redmi",
+    "Xiaomi"
+  ],
+  "match": {
+    "platforms": [
+      "android"
+    ],
+    "brands": [
+      "Redmi",
+      "Xiaomi"
+    ],
+    "internal_models": [
+      "sky"
+    ],
+    "chipsets": [
+      "parrot"
+    ],
+    "board_patterns": [
+      "(?i)^sky$"
+    ],
+    "build_patterns": [
+      "(?i)AQ3A\\.240912\\.001",
+      "(?i)OS2\\.0\\..*VMWCNXM"
+    ],
+    "storage_types": [
+      "UFS"
+    ],
+    "required_partitions": [
+      "boot_a",
+      "boot_b",
+      "persist",
+      "super",
+      "vbmeta_a",
+      "vbmeta_b"
+    ]
+  },
+  "transport_priority": [
+    "adb",
+    "fastboot",
+    "qualcomm_edl"
+  ],
+  "capabilities": {
+    "identity": true,
+    "partition_map": true,
+    "firmware_match": true,
+    "flash_planning": false,
+    "unbrick_planning": false,
+    "repair_profile_ready": false
+  },
+  "adapter_contracts": {},
+  "safety": {
+    "read_only": true,
+    "write_allowed": false,
+    "backup_required_before_external_write": true,
+    "profile_cannot_authorize_repairs": true,
+    "candidate_requires_owner_review": true
+  }
+}
