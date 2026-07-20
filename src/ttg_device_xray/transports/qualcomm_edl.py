@@ -39,8 +39,16 @@ class QualcommEdlProbe(ReadOnlyUsbServiceProbe):
     ) -> dict[str, Any]:
         return {
             "usb_transport_detected": True,
-            "edl_confirmed_by_usb": mode == "edl",
+            "edl_confirmed_by_usb": mode in {"edl", "edl-candidate"},
             "sahara_query_requires_helper": True,
             "programmer_uploaded": False,
             "read_only": True,
         }
+
+    def _endpoint_confirms_transport(
+        self,
+        endpoint: dict[str, str],
+        mode: str,
+        capabilities: dict[str, Any],
+    ) -> bool:
+        return bool(capabilities.get("edl_confirmed_by_usb"))
