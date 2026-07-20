@@ -10,7 +10,6 @@ from .analyzers.ipsw import IpswAnalysisError, write_ipsw_report
 from .bundle_seal import seal_bundle
 from .command import CommandRunner
 from .enhanced_pipeline import EnhancedXRayPipeline
-from .hunter_bridge import HunterBridge, HunterDelivery
 from .models import ScanBundle, TransportObservation
 from .pipeline import write_bundle
 from .platform_tools import PlatformToolsRunner
@@ -38,16 +37,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Additional profile directory; may be supplied more than once",
-    )
-    scan.add_argument(
-        "--no-hunter",
-        action="store_true",
-        help="Do not post this scan to Hunter",
-    )
-    scan.add_argument(
-        "--hunter-required",
-        action="store_true",
-        help="Return a non-zero exit code when Hunter delivery fails",
     )
 
     ipsw = subparsers.add_parser(
@@ -165,12 +154,6 @@ def main(argv: list[str] | None = None) -> int:
                             os.environ.get("TTG_XRAY_PROFILE_DIR", "").strip()
                         )
                     },
-                    "hunter": {
-                        "endpoint": HunterBridge._endpoint(),
-                        "token_configured": bool(
-                            os.environ.get("TTG_HUNTER_TOKEN", "").strip()
-                        ),
-                    },
                     "bundle_seal": {
                         "signing_key_configured": bool(
                             os.environ.get("TTG_XRAY_SIGNING_KEY", "").strip()
@@ -220,20 +203,6 @@ def main(argv: list[str] | None = None) -> int:
 
     target = write_bundle(bundle, args.output)
     profile_loader.write_match(bundle, target)
-
-    if args.no_hunter:
-        delivery = HunterDelivery(
-            attempted=False,
-            delivered=False,
-            endpoint=HunterBridge._endpoint(),
-            error="disabled by --no-hunter",
-        )
-        (target / "hunter_delivery.json").write_text(
-            json.dumps(delivery.to_dict(), indent=2), encoding="utf-8"
-        )
-    else:
-        delivery = HunterBridge().deliver(bundle, target)
-
     seal = seal_bundle(target, bundle)
     print(
         json.dumps(
@@ -251,16 +220,12 @@ def main(argv: list[str] | None = None) -> int:
                 "storage": bundle.storage.to_dict(),
                 "profile_match": profile_payload,
                 "repair_readiness": repair_readiness,
-                "hunter_delivery": delivery.to_dict(),
                 "bundle_seal": seal,
                 "output": str(target),
             },
             indent=2,
         )
     )
-
-    if args.hunter_required and not delivery.delivered:
-        return 3
     return 0 if bundle.certification.verdict.value != "UNSAFE" else 2
 
 

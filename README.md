@@ -40,7 +40,6 @@ PROBE
 -> CERTIFY BY DIMENSION
 -> RESOLVE REVIEWED PROFILE
 -> PLAN
--> HUNTER
 -> SEAL EVIDENCE BUNDLE
 ```
 
@@ -127,26 +126,6 @@ Samsung Download Mode. They contain no customer identifiers and require no conne
 See `docs/mtk-meta-helper-contract.md`, `docs/service-mode-helper-contract.md`, and
 `docs/candidate-bundle-v2.md`.
 
-## Automatic Hunter bridge
-
-Every scan is posted to Hunter after the evidence bundle and profile match are written. Configure an
-exact endpoint or a Hunter base URL:
-
-```powershell
-$env:TTG_HUNTER_XRAY_URL='https://hunter.thetechguyds.com/api/device-xray/ingest'
-# or
-$env:TTG_HUNTER_URL='https://hunter.thetechguyds.com'
-$env:TTG_HUNTER_TOKEN='...'
-ttg-xray scan --output scans
-```
-
-Delivery failures do not lose the scan. The payload is placed in `scans/_hunter_spool/`, and the
-bundle receives `hunter_delivery.json`. Raw IMEI, ECID, UDID, and serial values are hashed by default.
-Use `TTG_HUNTER_INCLUDE_SENSITIVE=1` only for an approved internal deployment.
-
-Use `--no-hunter` for an intentionally offline scan or `--hunter-required` when delivery must
-succeed.
-
 ## Evidence bundle
 
 ```text
@@ -170,8 +149,6 @@ scans/<scan-id>/
 ├─ certification.json
 ├─ profile_match.json
 ├─ recommended_plan.json
-├─ hunter_payload.json
-├─ hunter_delivery.json
 ├─ audit.jsonl
 ├─ bundle_manifest.json
 └─ bundle_manifest.sig
@@ -181,6 +158,9 @@ The manifest records SHA-256 for every completed evidence file, schema and scann
 selected candidate ID, creation and expiry times, signer key ID, and the fixed read-only boundary.
 Set `TTG_XRAY_SIGNING_KEY` and `TTG_XRAY_SIGNING_KEY_ID` on an approved workstation to emit a signed
 HMAC manifest. Without a key, the bundle is explicitly marked `UNSIGNED`.
+
+Public X-Ray builds produce local evidence only. Private distribution, diagnostics, approvals, and
+internal service integrations belong in separately access-controlled repositories.
 
 ## CI and releases
 
