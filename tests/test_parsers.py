@@ -16,14 +16,16 @@ lrwxrwxrwx 1 root root 22 2026-01-01 00:00 super -> /dev/block/mmcblk0p40
 def test_adb_inventory_calculates_bytes_and_slots():
     text = "boot_a|/dev/block/by-name/boot_a|/dev/block/sda12|4096|4096|0\n"
     result = AdbProbe._parse_partition_inventory(text)
-    assert result[0]["size_bytes"] == 4096 * 4096
+    assert result[0]["size_bytes"] == 4096 * 512
+    assert result[0]["logical_block_size"] == 4096
     assert result[0]["slot"] == "a"
 
 
 def test_storage_parser_detects_ufs():
     result = AdbProbe._parse_storage_inventory("sda|1000|4096|UFS 3.1|disk\n")
     assert result[0]["type"] == "UFS"
-    assert result[0]["capacity_bytes"] == 4_096_000
+    assert result[0]["capacity_bytes"] == 512_000
+    assert result[0]["logical_block_size"] == 4096
 
 
 def test_fastboot_var_parser_reads_stderr_style_output():
