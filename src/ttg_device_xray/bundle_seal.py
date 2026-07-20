@@ -23,6 +23,7 @@ def seal_bundle(bundle_dir: Path, bundle: ScanBundle) -> dict[str, Any]:
     The signing key is read from TTG_XRAY_SIGNING_KEY. When no key is configured,
     the digest manifest is still emitted but the signature report is explicitly
     UNSIGNED. Repair adapters can require status=SIGNED before accepting a bundle.
+    No file is modified after its digest is captured.
     """
 
     created_at = datetime.now(timezone.utc)
@@ -90,26 +91,12 @@ def seal_bundle(bundle_dir: Path, bundle: ScanBundle) -> dict[str, Any]:
             "reason": "TTG_XRAY_SIGNING_KEY is not configured",
         }
 
-    (bundle_dir / SIGNATURE_NAME).write_text(
-        json.dumps(signature_report, indent=2), encoding="utf-8"
-    )
-    with (bundle_dir / "audit.jsonl").open("a", encoding="utf-8") as stream:
-        stream.write(
-            json.dumps(
-                {
-                    "event": "BUNDLE_SEALED",
-                    "status": signature_report["status"],
-                    "manifest_sha256": manifest_sha256,
-                    "signer_key_id": signer_key_id,
-                    "file_count": len(files),
-                }
-            )
-            + "\n"
-        )
+    signature_path = bundle_dir / SIGNATURE_NAME
+    signature_path.write_text(json.dumps(signature_report, indent=2), encoding="utf-8")
 
     return {
         "manifest": str(manifest_path),
-        "signature": str(bundle_dir / SIGNATURE_NAME),
+        "signature": str(signature_path),
         "status": signature_report["status"],
         "manifest_sha256": manifest_sha256,
         "signer_key_id": signer_key_id,
