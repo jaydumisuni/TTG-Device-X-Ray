@@ -9,6 +9,9 @@ class TransportKind(str, Enum):
     ADB = "adb"
     FASTBOOT = "fastboot"
     MTK_META = "mtk_meta"
+    QUALCOMM_EDL = "qualcomm_edl"
+    SPD_DOWNLOAD = "spd_download"
+    SAMSUNG_DOWNLOAD = "samsung_download"
     APPLE_NORMAL = "apple_normal"
     APPLE_RECOVERY = "apple_recovery"
     APPLE_DFU = "apple_dfu"
@@ -143,6 +146,25 @@ class Certification:
 
 
 @dataclass(slots=True)
+class ProfileMatch:
+    status: str = "NO_PROFILE"
+    requested_profile_id: str = ""
+    profile_id: str | None = None
+    stage: str = ""
+    confidence: float = 0.0
+    source: str = ""
+    reasons: list[str] = field(default_factory=list)
+    mismatches: list[str] = field(default_factory=list)
+    capabilities: dict[str, Any] = field(default_factory=dict)
+    adapter_contracts: dict[str, Any] = field(default_factory=dict)
+    transport_priority: list[str] = field(default_factory=list)
+    write_allowed: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class ScanBundle:
     scan_id: str
     created_at: str
@@ -154,6 +176,7 @@ class ScanBundle:
     challenges: list[ChallengeFinding]
     certification: Certification
     plan: dict[str, Any]
+    profile_match: ProfileMatch = field(default_factory=ProfileMatch)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -166,5 +189,6 @@ class ScanBundle:
             "storage": self.storage.to_dict(),
             "challenges": [item.to_dict() for item in self.challenges],
             "certification": self.certification.to_dict(),
+            "profile_match": self.profile_match.to_dict(),
             "plan": self.plan,
         }

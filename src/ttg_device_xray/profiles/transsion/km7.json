@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "profile_id": "android:tecno:km7:mt6765",
+  "aliases": [
+    "android:tecno:km7",
+    "android:transsion:km7",
+    "android:tecno:km7:mt6768"
+  ],
+  "stage": "CANDIDATE",
+  "vendor_family": "Transsion",
+  "brands": [
+    "TECNO"
+  ],
+  "match": {
+    "platforms": [
+      "android"
+    ],
+    "brands": [
+      "TECNO"
+    ],
+    "internal_models": [
+      "KM7"
+    ],
+    "chipsets": [
+      "mt6765",
+      "mt6768"
+    ],
+    "board_patterns": [
+      "(?i)km7",
+      "(?i)k65"
+    ],
+    "build_patterns": [
+      "(?i)^KM7[-_]"
+    ],
+    "storage_types": [
+      "eMMC",
+      "UFS"
+    ],
+    "required_partitions": [
+      "proinfo",
+      "nvram",
+      "nvdata"
+    ]
+  },
+  "transport_priority": [
+    "mtk_meta",
+    "adb",
+    "fastboot"
+  ],
+  "capabilities": {
+    "identity": true,
+    "partition_map": true,
+    "firmware_match": true,
+    "flash_planning": true,
+    "unbrick_planning": true
+  },
+  "adapter_contracts": {
+    "approved_repair": "transsion.approved-repair.v1",
+    "flash": "transsion.flash-plan.v1",
+    "unbrick": "transsion.unbrick-plan.v1"
+  },
+  "safety": {
+    "read_only": true,
+    "write_allowed": false,
+    "backup_required_before_external_write": true,
+    "profile_cannot_authorize_repairs": true
+  }
+}
