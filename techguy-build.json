@@ -8,7 +8,7 @@
     "tool_id": "ttg-device-xray",
     "display_name": "TTG Device X-Ray",
     "channel": "dev",
-    "version": "0.4.3-dev.1",
+    "version": "0.4.3-dev.2",
     "entry_executable": "TTG-Device-XRay.exe",
     "output_directory": "dist-exe",
     "dev_repository": "jaydumisuni/tools-test-repo",
