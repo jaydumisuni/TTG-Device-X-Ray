@@ -45,14 +45,16 @@ def test_packaged_km7_profile_matches_certified_evidence():
         ],
     )
     bundle = EnhancedXRayPipeline([StaticProbe([observation])]).scan()
-    match = ProfileLoader().match_bundle(bundle)
+    loader = ProfileLoader()
+    loader.apply_bundle_matches(bundle)
 
-    assert bundle.certification.profile_id == "android:tecno:km7:mt6765"
-    assert match.status == "MATCHED"
-    assert match.profile_id == "android:tecno:km7:mt6765"
-    assert match.confidence == 1.0
-    assert match.write_allowed is False
-    assert match.adapter_contracts["flash"] == "transsion.flash-plan.v1"
+    assert bundle.certification.proposed_profile_id == "android:tecno:km7:mt6765"
+    assert bundle.profile_match.status == "MATCHED"
+    assert bundle.profile_match.profile_id == "android:tecno:km7:mt6765"
+    assert bundle.profile_match.confidence == 1.0
+    assert bundle.certification.dimensions.profile_match_confidence == 1.0
+    assert bundle.profile_match.write_allowed is False
+    assert bundle.profile_match.adapter_contracts["flash"] == "transsion.flash-plan.v1"
 
 
 def test_profile_loader_fails_closed_when_no_profile_matches():
@@ -69,7 +71,9 @@ def test_profile_loader_fails_closed_when_no_profile_matches():
         },
     )
     bundle = EnhancedXRayPipeline([StaticProbe([observation])]).scan()
-    match = ProfileLoader().match_bundle(bundle)
-    assert match.status in {"NO_MATCH", "NO_PROFILE"}
-    assert match.profile_id is None
-    assert match.write_allowed is False
+    loader = ProfileLoader()
+    loader.apply_bundle_matches(bundle)
+
+    assert bundle.profile_match.status in {"NO_MATCH", "NO_PROFILE"}
+    assert bundle.profile_match.profile_id is None
+    assert bundle.profile_match.write_allowed is False

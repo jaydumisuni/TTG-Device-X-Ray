@@ -8,7 +8,14 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Iterable
 
-from .models import ProfileMatch, ScanBundle
+from .models import (
+    DeviceCandidate,
+    DeviceIdentity,
+    ProfileMatch,
+    ScanBundle,
+    StorageSummary,
+    TransportObservation,
+)
 
 
 @dataclass(slots=True)
@@ -18,11 +25,11 @@ class LoadedProfile:
 
 
 class ProfileLoader:
-    """Load device profiles and match them against a certified evidence bundle.
+    """Resolve proposed profile IDs against a versioned approved registry.
 
-    Profiles guide identification, flash planning and adapter selection. They do
-    not grant write permission. Every returned ProfileMatch is fail-closed with
-    write_allowed=False, including exact matches.
+    Generated profile IDs are only proposals. A profile becomes a match only
+    after evidence-weighted comparison against a packaged or explicitly supplied
+    registry entry. Profiles never grant write permission.
     """
 
     def __init__(self, extra_roots: Iterable[Path] | None = None) -> None:
@@ -47,8 +54,74 @@ class ProfileLoader:
         return list(deduplicated.values())
 
     def match_bundle(self, bundle: ScanBundle) -> ProfileMatch:
-        requested = bundle.certification.profile_id or ""
-        candidates = [self._score(profile, bundle, requested) for profile in self.load()]
+        return self._match(
+            requested=bundle.certification.proposed_profile_id or "",
+            identity=bundle.identity,
+            storage=bundle.storage,
+            observations=(
+                next(
+                    (
+                        item.observations
+                        for item in bundle.candidates
+                        if item.candidate_id == bundle.selected_candidate_id
+                    ),
+                    [],
+                )
+            ),
+        )
+
+    def match_candidate(self, candidate: DeviceCandidate) -> ProfileMatch:
+        return self._match(
+            requested=candidate.certification.proposed_profile_id or "",
+            identity=candidate.identity,
+            storage=candidate.storage,
+            observations=candidate.observations,
+        )
+
+    def apply_bundle_matches(self, bundle: ScanBundle) -> ProfileMatch:
+        for candidate in bundle.candidates:
+            candidate.profile_match = self.match_candidate(candidate)
+            candidate.certification.dimensions.profile_match_confidence = (
+                candidate.profile_match.confidence
+            )
+
+        selected = next(
+            (
+                item
+                for item in bundle.candidates
+                if item.candidate_id == bundle.selected_candidate_id
+            ),
+            None,
+        )
+        if selected is not None:
+            bundle.profile_match = selected.profile_match
+            bundle.certification.dimensions.profile_match_confidence = (
+                selected.profile_match.confidence
+            )
+        else:
+            bundle.profile_match = ProfileMatch(
+                status="NO_SELECTION" if bundle.candidates else "NO_PROFILE",
+                requested_profile_id=bundle.certification.proposed_profile_id or "",
+                reasons=[
+                    "Select exactly one device candidate before resolving a repair profile."
+                    if bundle.candidates
+                    else "No connected device candidate was available."
+                ],
+                write_allowed=False,
+            )
+        return bundle.profile_match
+
+    def _match(
+        self,
+        requested: str,
+        identity: DeviceIdentity,
+        storage: StorageSummary,
+        observations: list[TransportObservation],
+    ) -> ProfileMatch:
+        candidates = [
+            self._score(profile, requested, identity, storage, observations)
+            for profile in self.load()
+        ]
         candidates = [item for item in candidates if item.profile_id]
         if not candidates:
             return ProfileMatch(
@@ -74,13 +147,40 @@ class ProfileLoader:
 
     def write_match(self, bundle: ScanBundle, bundle_dir: Path) -> Path:
         path = bundle_dir / "profile_match.json"
-        path.write_text(json.dumps(bundle.profile_match.to_dict(), indent=2), encoding="utf-8")
+        payload = {
+            "selected_candidate_id": bundle.selected_candidate_id,
+            "selected": bundle.profile_match.to_dict(),
+            "candidates": [
+                {
+                    "candidate_id": item.candidate_id,
+                    "proposed_profile_id": item.certification.proposed_profile_id,
+                    "match": item.profile_match.to_dict(),
+                }
+                for item in bundle.candidates
+            ],
+            "write_allowed": False,
+        }
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+        for candidate in bundle.candidates:
+            candidate_path = bundle_dir / "candidates" / candidate.candidate_id
+            if candidate_path.exists():
+                (candidate_path / "profile_match.json").write_text(
+                    json.dumps(candidate.profile_match.to_dict(), indent=2),
+                    encoding="utf-8",
+                )
+                (candidate_path / "certification.json").write_text(
+                    json.dumps(candidate.certification.to_dict(), indent=2),
+                    encoding="utf-8",
+                )
+
         audit = bundle_dir / "audit.jsonl"
         with audit.open("a", encoding="utf-8") as stream:
             stream.write(
                 json.dumps(
                     {
                         "event": "PROFILE_MATCH",
+                        "selected_candidate_id": bundle.selected_candidate_id,
                         "status": bundle.profile_match.status,
                         "requested_profile_id": bundle.profile_match.requested_profile_id,
                         "profile_id": bundle.profile_match.profile_id,
@@ -94,7 +194,12 @@ class ProfileLoader:
         return path
 
     def _score(
-        self, loaded: LoadedProfile, bundle: ScanBundle, requested: str
+        self,
+        loaded: LoadedProfile,
+        requested: str,
+        identity: DeviceIdentity,
+        storage: StorageSummary,
+        observations: list[TransportObservation],
     ) -> ProfileMatch:
         profile = loaded.data
         profile_id = str(profile.get("profile_id", "")).strip()
@@ -105,55 +210,43 @@ class ProfileLoader:
         weighted: list[tuple[str, float, bool, str]] = []
         if requested:
             exact = self._norm(requested) in ids
-            weighted.append(("profile_id", 0.35, exact, requested))
+            weighted.append(("proposed_profile_id", 0.35, exact, requested))
 
         self._add_set_rule(
-            weighted,
-            "platform",
-            0.08,
-            bundle.identity.platform,
-            match.get("platforms", []),
+            weighted, "platform", 0.08, identity.platform, match.get("platforms", [])
         )
         self._add_set_rule(
             weighted,
             "brand",
             0.10,
-            bundle.identity.brand,
+            identity.brand,
             match.get("brands", profile.get("brands", [])),
         )
         self._add_set_rule(
             weighted,
             "internal_model",
             0.18,
-            bundle.identity.internal_model,
+            identity.internal_model,
             match.get("internal_models", []),
         )
         self._add_set_rule(
-            weighted,
-            "chipset",
-            0.10,
-            bundle.identity.chipset,
-            match.get("chipsets", []),
+            weighted, "chipset", 0.10, identity.chipset, match.get("chipsets", [])
         )
         self._add_regex_rule(
-            weighted,
-            "board",
-            0.05,
-            bundle.identity.board,
-            match.get("board_patterns", []),
+            weighted, "board", 0.05, identity.board, match.get("board_patterns", [])
         )
         self._add_regex_rule(
             weighted,
             "build",
             0.05,
-            bundle.identity.build or bundle.identity.build_fingerprint,
+            identity.build or identity.build_fingerprint,
             match.get("build_patterns", []),
         )
         self._add_set_rule(
             weighted,
             "storage_type",
             0.04,
-            bundle.storage.storage_type,
+            storage.storage_type,
             match.get("storage_types", []),
         )
 
@@ -163,7 +256,7 @@ class ProfileLoader:
         if required_partitions:
             observed = {
                 self._norm(partition.get("name", ""))
-                for observation in bundle.observations
+                for observation in observations
                 for partition in observation.partitions
             }
             weighted.append(
@@ -176,9 +269,7 @@ class ProfileLoader:
             )
 
         available_transports = {
-            observation.transport.value
-            for observation in bundle.observations
-            if observation.connected
+            observation.transport.value for observation in observations if observation.connected
         }
         priority = [str(item) for item in profile.get("transport_priority", [])]
         if priority:
@@ -230,7 +321,11 @@ class ProfileLoader:
         observed: str,
         expected: Any,
     ) -> None:
-        values = {cls._norm(item) for item in expected if item} if isinstance(expected, list) else set()
+        values = (
+            {cls._norm(item) for item in expected if item}
+            if isinstance(expected, list)
+            else set()
+        )
         if not values:
             return
         normalized = cls._norm(observed)

@@ -8,10 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from .candidate_grouping import GroupedCandidate, ObservationGrouper
 from .models import (
     Certification,
+    CertificationDimensions,
     CertificationVerdict,
     ChallengeFinding,
+    DeviceCandidate,
     DeviceIdentity,
     FirmwareFingerprint,
     ScanBundle,
@@ -21,8 +24,15 @@ from .models import (
 )
 
 
+APPLE_TRANSPORTS = {
+    TransportKind.APPLE_NORMAL,
+    TransportKind.APPLE_RECOVERY,
+    TransportKind.APPLE_DFU,
+}
+
+
 class XRayPipeline:
-    """PROBE -> MAP -> CORRELATE -> CHALLENGE -> CERTIFY -> PLAN."""
+    """PROBE -> NORMALIZE -> GROUP -> CORRELATE -> MAP -> CHALLENGE -> CERTIFY -> PLAN."""
 
     def __init__(self, probes: Iterable[object]) -> None:
         self.probes = list(probes)
@@ -32,23 +42,109 @@ class XRayPipeline:
         for probe in self.probes:
             observations.extend(probe.probe())
 
-        identity = self._correlate(observations)
-        firmware = self._fingerprint_firmware(observations, identity)
-        storage = self._summarize_storage(observations, identity)
-        challenges = self._challenge(observations, identity, firmware, storage)
-        certification = self._certify(observations, identity, firmware, storage, challenges)
-        plan = self._plan(observations, identity, firmware, storage, certification, challenges)
+        grouped = ObservationGrouper.group(observations)
+        candidates = [self._build_candidate(item) for item in grouped]
+        created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        scan_id = f"xray-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+
+        if len(candidates) == 1:
+            selected = candidates[0]
+            identity = selected.identity
+            firmware = selected.firmware
+            storage = selected.storage
+            challenges = selected.challenges
+            certification = selected.certification
+            plan = self._plan(
+                selected.observations,
+                identity,
+                firmware,
+                storage,
+                certification,
+                challenges,
+            )
+            selected_candidate_id = selected.candidate_id
+        else:
+            identity = DeviceIdentity()
+            firmware = self._fingerprint_firmware([], identity)
+            storage = self._summarize_storage([], identity)
+            if candidates:
+                challenges = [
+                    ChallengeFinding(
+                        severity="critical",
+                        code="MULTIPLE_DEVICE_CANDIDATES",
+                        message=(
+                            "More than one physical device candidate is connected. "
+                            "Select one candidate and rescan before adapter consumption."
+                        ),
+                        evidence={
+                            "candidate_ids": [item.candidate_id for item in candidates],
+                            "candidate_count": len(candidates),
+                        },
+                    )
+                ]
+            else:
+                challenges = [
+                    ChallengeFinding(
+                        severity="critical",
+                        code="NO_CONNECTED_DEVICE",
+                        message="No supported transport reported a connected device.",
+                    )
+                ]
+            certification = self._certify([], identity, firmware, storage, challenges)
+            plan = self._plan([], identity, firmware, storage, certification, challenges)
+            plan["candidate_count"] = len(candidates)
+            plan["candidate_ids"] = [item.candidate_id for item in candidates]
+            plan["recommended_action"] = (
+                "SELECT_SINGLE_DEVICE_CANDIDATE" if candidates else "STOP_NO_WRITE_WORKFLOW"
+            )
+            selected_candidate_id = None
+
         return ScanBundle(
-            scan_id=f"xray-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}",
-            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            mission={"name": mission, "read_only": True},
+            scan_id=scan_id,
+            created_at=created_at,
+            mission={
+                "name": mission,
+                "read_only": True,
+                "pipeline": (
+                    "PROBE->NORMALIZE->GROUP->CORRELATE->FINGERPRINT->MAP->"
+                    "CHALLENGE->CERTIFY->PROFILE->PLAN->SEAL"
+                ),
+            },
             observations=observations,
+            candidates=candidates,
+            selected_candidate_id=selected_candidate_id,
             identity=identity,
             firmware=firmware,
             storage=storage,
             challenges=challenges,
             certification=certification,
             plan=plan,
+        )
+
+    def _build_candidate(self, grouped: GroupedCandidate) -> DeviceCandidate:
+        identity = self._correlate(grouped.observations)
+        firmware = self._fingerprint_firmware(grouped.observations, identity)
+        storage = self._summarize_storage(grouped.observations, identity)
+        challenges = self._challenge(grouped.observations, identity, firmware, storage)
+        certification = self._certify(
+            grouped.observations,
+            identity,
+            firmware,
+            storage,
+            challenges,
+            link_confidence=grouped.link_confidence,
+        )
+        return DeviceCandidate(
+            candidate_id=grouped.candidate_id,
+            observation_indexes=grouped.observation_indexes,
+            observations=grouped.observations,
+            link_confidence=grouped.link_confidence,
+            link_evidence=grouped.link_evidence,
+            identity=identity,
+            firmware=firmware,
+            storage=storage,
+            challenges=challenges,
+            certification=certification,
         )
 
     @staticmethod
@@ -81,10 +177,10 @@ class XRayPipeline:
                 identity.storage_type = ids.get("storage_type", identity.storage_type)
                 identity.storage_model = ids.get("storage_model", identity.storage_model)
                 capacity = ids.get("storage_capacity_bytes", "")
-                if capacity.isdigit():
+                if str(capacity).isdigit():
                     identity.storage_capacity_bytes = int(capacity)
                 identity.slot_suffix = ids.get("slot_suffix", identity.slot_suffix)
-                identity.dynamic_partitions = bool(
+                identity.dynamic_partitions = identity.dynamic_partitions or bool(
                     observation.capabilities.get("dynamic_partitions_detected")
                 )
                 identity.verified_boot_state = ids.get(
@@ -119,7 +215,8 @@ class XRayPipeline:
                 identity.product_name = ids.get("ProductName", identity.product_name)
                 identity.internal_model = ids.get("HardwareModel", identity.internal_model)
                 identity.marketing_model = ids.get("DeviceName", identity.marketing_model)
-                identity.serial = ids.get("SerialNumber", ids.get("udid", identity.serial))
+                identity.udid = ids.get("udid", ids.get("UniqueDeviceID", identity.udid))
+                identity.apple_serial = ids.get("SerialNumber", identity.apple_serial)
                 identity.imei = ids.get(
                     "InternationalMobileEquipmentIdentity", identity.imei
                 )
@@ -131,10 +228,7 @@ class XRayPipeline:
                 identity.chipset = ids.get("ChipID", identity.chipset)
                 identity.board = ids.get("BoardId", identity.board)
 
-            elif observation.transport in {
-                TransportKind.APPLE_RECOVERY,
-                TransportKind.APPLE_DFU,
-            }:
+            elif observation.transport in {TransportKind.APPLE_RECOVERY, TransportKind.APPLE_DFU}:
                 identity.platform = "apple"
                 identity.brand = "Apple"
                 identity.manufacturer = "Apple"
@@ -143,7 +237,6 @@ class XRayPipeline:
                 identity.board = ids.get("BDID", identity.board)
                 identity.chipset = ids.get("CPID", identity.chipset)
                 identity.ecid = ids.get("ECID", identity.ecid)
-                identity.serial = ids.get("ECID", identity.serial)
                 identity.bootloader = ids.get("IBFL", ids.get("IBOOT", identity.bootloader))
 
         identity.evidence_sources = sorted(set(identity.evidence_sources))
@@ -221,8 +314,8 @@ class XRayPipeline:
             if not item.connected:
                 continue
             candidate = item.capabilities.get("storage")
-            if isinstance(candidate, dict) and int(candidate.get("capacity_bytes", 0)) > int(
-                storage.get("capacity_bytes", 0)
+            if isinstance(candidate, dict) and int(candidate.get("capacity_bytes", 0) or 0) > int(
+                storage.get("capacity_bytes", 0) or 0
             ):
                 storage = candidate
             dynamic = dynamic or bool(item.capabilities.get("dynamic_partitions_detected"))
@@ -262,42 +355,79 @@ class XRayPipeline:
         findings: list[ChallengeFinding] = []
         connected = [item for item in observations if item.connected]
         platforms = {
-            "apple" if item.transport.value.startswith("apple") else "android"
-            for item in connected
+            "apple" if item.transport in APPLE_TRANSPORTS else "android" for item in connected
         }
-        serials = {
-            value
-            for item in connected
-            for value in [
-                item.identifiers.get("serial")
-                or item.identifiers.get("serialno")
-                or item.identifiers.get("ECID")
-            ]
-            if value
-        }
-
         if len(platforms) > 1:
             findings.append(
                 ChallengeFinding(
                     severity="critical",
                     code="MULTIPLE_PLATFORM_FAMILIES",
-                    message="Apple and Android transports are active in the same scan.",
+                    message="Apple and Android observations were grouped into one candidate.",
                     evidence={"platforms": sorted(platforms)},
                 )
             )
-        if len(serials) > 1:
+
+        android_serials = {
+            item.identifiers.get("serial") or item.identifiers.get("serialno")
+            for item in connected
+            if item.transport not in APPLE_TRANSPORTS
+        } - {None, ""}
+        if len(android_serials) > 1:
             findings.append(
                 ChallengeFinding(
-                    severity="warning",
+                    severity="critical",
                     code="MULTIPLE_DEVICE_SERIALS",
-                    message="More than one device identity appears in the evidence.",
-                    evidence={"serials": sorted(serials)},
+                    message="More than one Android serial exists inside one candidate.",
+                    evidence={"serials": sorted(android_serials)},
                 )
             )
+
+        apple_identifier_sets = {
+            "udids": {
+                item.identifiers.get("udid") or item.identifiers.get("UniqueDeviceID")
+                for item in connected
+                if item.transport in APPLE_TRANSPORTS
+            }
+            - {None, ""},
+            "serial_numbers": {
+                item.identifiers.get("SerialNumber")
+                for item in connected
+                if item.transport in APPLE_TRANSPORTS
+            }
+            - {None, ""},
+            "ecids": {
+                item.identifiers.get("ECID")
+                for item in connected
+                if item.transport in APPLE_TRANSPORTS
+            }
+            - {None, ""},
+        }
+        for identifier_type, values in apple_identifier_sets.items():
+            if len(values) > 1:
+                findings.append(
+                    ChallengeFinding(
+                        severity="critical",
+                        code=f"MULTIPLE_APPLE_{identifier_type.upper()}",
+                        message=f"More than one Apple {identifier_type} value exists in one candidate.",
+                        evidence={identifier_type: sorted(values)},
+                    )
+                )
+
         if identity.platform == "android" and identity.chipset:
             soc = identity.chipset.lower()
             brand = identity.brand.lower()
-            expected = ("exynos", "universal", "qcom", "sm", "msm", "mt", "dimensity")
+            expected = (
+                "exynos",
+                "universal",
+                "qcom",
+                "sm",
+                "msm",
+                "mt",
+                "dimensity",
+                "ums",
+                "sprd",
+                "sc",
+            )
             if "samsung" in brand and not any(token in soc for token in expected):
                 findings.append(
                     ChallengeFinding(
@@ -307,6 +437,7 @@ class XRayPipeline:
                         evidence={"brand": identity.brand, "chipset": identity.chipset},
                     )
                 )
+
         if identity.platform == "apple" and identity.product_type:
             pattern = r"^(iPhone|iPad|iPod|AppleTV|Watch)\d+,\d+$"
             if not re.match(pattern, identity.product_type):
@@ -412,40 +543,72 @@ class XRayPipeline:
         firmware: FirmwareFingerprint,
         storage: StorageSummary,
         challenges: list[ChallengeFinding],
+        link_confidence: float = 1.0,
     ) -> Certification:
         connected = [item for item in observations if item.connected]
-        score = 0.0
-        reasons: list[str] = []
-        blockers = [item.message for item in challenges if item.severity == "critical"]
+        stable_identifier = bool(
+            identity.serial
+            or identity.udid
+            or identity.apple_serial
+            or identity.ecid
+        )
+        identity_signals = [
+            identity.platform != "unknown",
+            bool(identity.internal_model or identity.product_type),
+            bool(identity.chipset or identity.board),
+            stable_identifier,
+        ]
+        identity_confidence = round(sum(identity_signals) / len(identity_signals), 3)
+        transport_confidence = round(link_confidence if connected else 0.0, 3)
+        firmware_confidence = round(firmware.completeness, 3)
 
-        if connected:
-            score += 0.20
-            reasons.append("At least one supported transport is connected.")
-        if identity.platform != "unknown":
-            score += 0.10
-            reasons.append(f"Platform identified as {identity.platform}.")
-        if identity.internal_model or identity.product_type:
-            score += 0.15
-            reasons.append("Internal model or Apple ProductType was observed.")
-        if identity.chipset or identity.board:
-            score += 0.15
-            reasons.append("Chipset or board evidence was observed.")
-        if identity.serial or identity.ecid:
-            score += 0.10
-            reasons.append("A stable device identifier was observed.")
-        if firmware.completeness >= 0.6:
-            score += 0.15
-            reasons.append("Firmware fingerprint has useful completeness.")
-        if storage.partition_count or identity.platform == "apple":
-            score += 0.10
-            reasons.append("Storage/partition evidence or Apple hardware identity was observed.")
-        if len(identity.evidence_sources) >= 2:
-            score += 0.05
-            reasons.append("Multiple transport evidence sources agree.")
+        storage_signals = [
+            bool(storage.storage_type),
+            storage.capacity_bytes > 0,
+            bool(storage.model),
+        ]
+        storage_confidence = round(sum(storage_signals) / len(storage_signals), 3)
 
-        score -= 0.10 * sum(1 for item in challenges if item.severity == "warning")
+        partition_entries = [
+            partition
+            for item in connected
+            for partition in item.partitions
+        ]
+        if partition_entries:
+            sized = sum(1 for item in partition_entries if int(item.get("size_bytes", 0) or 0) > 0)
+            partition_confidence = round(0.5 + (0.5 * sized / len(partition_entries)), 3)
+        else:
+            partition_confidence = 0.0
+
+        dimensions = CertificationDimensions(
+            identity_confidence=identity_confidence,
+            transport_confidence=transport_confidence,
+            firmware_confidence=firmware_confidence,
+            storage_confidence=storage_confidence,
+            partition_map_confidence=partition_confidence,
+            profile_match_confidence=0.0,
+            freshness_confidence=1.0 if connected else 0.0,
+        )
+        score = (
+            0.30 * identity_confidence
+            + 0.20 * transport_confidence
+            + 0.20 * firmware_confidence
+            + 0.10 * storage_confidence
+            + 0.10 * partition_confidence
+            + 0.10 * dimensions.freshness_confidence
+        )
+        score -= 0.05 * sum(1 for item in challenges if item.severity == "warning")
         score = max(0.0, min(1.0, round(score, 3)))
 
+        blockers = [item.message for item in challenges if item.severity == "critical"]
+        reasons = [
+            f"identity_confidence={identity_confidence}",
+            f"transport_confidence={transport_confidence}",
+            f"firmware_confidence={firmware_confidence}",
+            f"storage_confidence={storage_confidence}",
+            f"partition_map_confidence={partition_confidence}",
+            f"freshness_confidence={dimensions.freshness_confidence}",
+        ]
         if blockers:
             verdict = CertificationVerdict.UNSAFE
         elif score >= 0.80:
@@ -455,18 +618,23 @@ class XRayPipeline:
         else:
             verdict = CertificationVerdict.UNSAFE
 
-        profile = XRayPipeline._profile_id(identity) if verdict != CertificationVerdict.UNSAFE else None
+        proposal = (
+            XRayPipeline._proposed_profile_id(identity)
+            if verdict != CertificationVerdict.UNSAFE
+            else None
+        )
         return Certification(
             verdict=verdict,
             confidence=score,
             reasons=reasons,
             blockers=blockers,
-            profile_id=profile,
+            proposed_profile_id=proposal,
+            dimensions=dimensions,
             write_allowed=False,
         )
 
     @staticmethod
-    def _profile_id(identity: DeviceIdentity) -> str | None:
+    def _proposed_profile_id(identity: DeviceIdentity) -> str | None:
         if identity.platform == "apple":
             token = identity.product_type or identity.internal_model
             return f"apple:{token.lower()}" if token else None
@@ -490,22 +658,12 @@ class XRayPipeline:
     ) -> dict[str, object]:
         connected_modes = [item.mode for item in observations if item.connected]
         if certification.verdict == CertificationVerdict.CERTIFIED:
-            action = "MATCH_PROFILE_AND_PREPARE_REVIEWED_ADAPTER"
+            action = "RESOLVE_APPROVED_PROFILE_AND_PREPARE_REVIEWED_ADAPTER"
         elif certification.verdict == CertificationVerdict.INVESTIGATE:
             action = "HUNTER_OR_CODE_AGENT_REVIEW"
         else:
             action = "STOP_NO_WRITE_WORKFLOW"
 
-        flash_signals = {
-            "exact_firmware_fingerprint_ready": firmware.completeness >= 0.8,
-            "partition_layout_mapped": storage.partition_count > 0,
-            "storage_capacity_known": storage.capacity_bytes > 0,
-            "ab_slots": storage.ab_slots,
-            "dynamic_partitions": storage.dynamic_partitions,
-            "bootloader_locked": identity.bootloader_locked,
-            "verified_boot_state": identity.verified_boot_state,
-            "critical_partition_backups_required": storage.critical_partitions,
-        }
         return {
             "recommended_action": action,
             "read_only_complete": True,
@@ -514,10 +672,22 @@ class XRayPipeline:
             "partition_entries_observed": storage.partition_count,
             "firmware_fingerprint": firmware.fingerprint_sha256,
             "firmware_completeness": firmware.completeness,
-            "flash_safety_signals": flash_signals,
+            "proposed_profile_id": certification.proposed_profile_id,
+            "certification_dimensions": certification.dimensions.to_dict(),
+            "flash_safety_signals": {
+                "exact_firmware_fingerprint_ready": firmware.completeness >= 0.8,
+                "partition_layout_mapped": storage.partition_count > 0,
+                "storage_capacity_known": storage.capacity_bytes > 0,
+                "ab_slots": storage.ab_slots,
+                "dynamic_partitions": storage.dynamic_partitions,
+                "bootloader_locked": identity.bootloader_locked,
+                "verified_boot_state": identity.verified_boot_state,
+                "critical_partition_backups_required": storage.critical_partitions,
+            },
             "challenge_codes": [item.code for item in challenges],
             "next_consumers": [
                 "Hunter",
+                "Ptah Detector Observations",
                 "TechGuy Tool",
                 "firmware matcher",
                 "flash planner",
@@ -542,17 +712,28 @@ def write_bundle(bundle: ScanBundle, output_root: Path) -> Path:
     target.mkdir(parents=True, exist_ok=False)
 
     observations = [item.to_dict() for item in bundle.observations]
+    selected = next(
+        (item for item in bundle.candidates if item.candidate_id == bundle.selected_candidate_id),
+        None,
+    )
+    selected_observations = selected.observations if selected else []
     partitions = [
         {"transport": item.transport.value, **partition}
-        for item in bundle.observations
+        for item in selected_observations
         for partition in item.partitions
     ]
     files = {
         "mission.json": bundle.mission,
         "transport_evidence.json": observations,
+        "device_candidates.json": {
+            "selected_candidate_id": bundle.selected_candidate_id,
+            "candidate_count": len(bundle.candidates),
+            "candidates": [item.to_dict() for item in bundle.candidates],
+        },
         "device_identity.json": bundle.identity.to_dict(),
         "storage_summary.json": bundle.storage.to_dict(),
         "partition_map.json": {
+            "candidate_id": bundle.selected_candidate_id,
             "summary": bundle.storage.to_dict(),
             "partitions": partitions,
         },
@@ -566,9 +747,45 @@ def write_bundle(bundle: ScanBundle, output_root: Path) -> Path:
     for name, payload in files.items():
         (target / name).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
+    candidates_root = target / "candidates"
+    for candidate in bundle.candidates:
+        candidate_dir = candidates_root / candidate.candidate_id
+        candidate_dir.mkdir(parents=True, exist_ok=False)
+        candidate_partitions = [
+            {"transport": item.transport.value, **partition}
+            for item in candidate.observations
+            for partition in item.partitions
+        ]
+        candidate_files = {
+            "candidate.json": candidate.to_dict(),
+            "device_identity.json": candidate.identity.to_dict(),
+            "firmware_fingerprint.json": candidate.firmware.to_dict(),
+            "storage_summary.json": candidate.storage.to_dict(),
+            "partition_map.json": {
+                "candidate_id": candidate.candidate_id,
+                "summary": candidate.storage.to_dict(),
+                "partitions": candidate_partitions,
+            },
+            "challenger_findings.json": {
+                "findings": [item.to_dict() for item in candidate.challenges]
+            },
+            "certification.json": candidate.certification.to_dict(),
+        }
+        for name, payload in candidate_files.items():
+            (candidate_dir / name).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
     audit_path = target / "audit.jsonl"
     with audit_path.open("w", encoding="utf-8") as stream:
-        stream.write(json.dumps({"event": "SCAN_CREATED", "scan_id": bundle.scan_id}) + "\n")
+        stream.write(
+            json.dumps(
+                {
+                    "event": "SCAN_CREATED",
+                    "scan_id": bundle.scan_id,
+                    "schema_version": bundle.schema_version,
+                }
+            )
+            + "\n"
+        )
         for observation in observations:
             stream.write(
                 json.dumps(
@@ -577,6 +794,19 @@ def write_bundle(bundle: ScanBundle, output_root: Path) -> Path:
                         "transport": observation["transport"],
                         "connected": observation["connected"],
                         "mode": observation["mode"],
+                    }
+                )
+                + "\n"
+            )
+        for candidate in bundle.candidates:
+            stream.write(
+                json.dumps(
+                    {
+                        "event": "DEVICE_CANDIDATE",
+                        "candidate_id": candidate.candidate_id,
+                        "observation_indexes": candidate.observation_indexes,
+                        "link_confidence": candidate.link_confidence,
+                        "verdict": candidate.certification.verdict.value,
                     }
                 )
                 + "\n"
@@ -597,6 +827,8 @@ def write_bundle(bundle: ScanBundle, output_root: Path) -> Path:
                     "event": "CERTIFICATION",
                     "verdict": bundle.certification.verdict.value,
                     "confidence": bundle.certification.confidence,
+                    "dimensions": bundle.certification.dimensions.to_dict(),
+                    "selected_candidate_id": bundle.selected_candidate_id,
                 }
             )
             + "\n"
