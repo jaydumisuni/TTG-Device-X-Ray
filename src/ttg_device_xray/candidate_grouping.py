@@ -27,10 +27,10 @@ class GroupedCandidate:
 class ObservationGrouper:
     """Group transport observations by physical device before correlation.
 
-    Strong identifiers are never compared across identifier types. In particular,
-    Apple ECID, UDID and serial number remain separate identifiers. Apple
-    normal/recovery observations may be linked only through corroborating hardware
-    evidence and the link confidence is recorded explicitly.
+    Strong identifiers are never compared across identifier types. Apple ECID,
+    UDID and serial number remain separate identifiers. Matching Apple hardware
+    attributes alone produce a link proposal, not an automatic merge, because two
+    different devices of the same model can expose identical hardware evidence.
     """
 
     @classmethod
@@ -77,8 +77,6 @@ class ObservationGrouper:
                         1.0,
                     )
 
-        # Apple normal/recovery modes usually expose different identifier types.
-        # Correlate only when at least two independent hardware attributes agree.
         for left in range(len(connected)):
             for right in range(left + 1, len(connected)):
                 if find(left) == find(right):
@@ -88,18 +86,43 @@ class ObservationGrouper:
                 if left_obs.transport not in APPLE_TRANSPORTS or right_obs.transport not in APPLE_TRANSPORTS:
                     continue
                 matches = cls._apple_hardware_matches(left_obs, right_obs)
-                if len(matches) >= 2:
-                    score = round(min(0.95, 0.65 + (0.10 * len(matches))), 3)
+                if len(matches) < 2:
+                    continue
+
+                score = round(min(0.95, 0.55 + (0.10 * len(matches))), 3)
+                left_token = cls._correlation_token(left_obs)
+                right_token = cls._correlation_token(right_obs)
+                if left_token and left_token == right_token:
                     union(
                         left,
                         right,
                         {
-                            "method": "apple_hardware_correlation",
+                            "method": "apple_session_correlation",
                             "matched_fields": matches,
+                            "correlation_token_sha256": hashlib.sha256(
+                                left_token.encode("utf-8")
+                            ).hexdigest(),
                             "confidence": score,
                             "note": "ECID, UDID and serial remain distinct identifiers",
                         },
                         score,
+                    )
+                else:
+                    proposal = {
+                        "method": "apple_hardware_link_proposal",
+                        "matched_fields": matches,
+                        "confidence": score,
+                        "merged": False,
+                        "reason": (
+                            "Hardware identity is not unique enough to prove one physical device; "
+                            "a shared correlation token or same-type strong identifier is required"
+                        ),
+                    }
+                    evidence[find(left)].append(
+                        {**proposal, "other_observation_index": connected[right][0]}
+                    )
+                    evidence[find(right)].append(
+                        {**proposal, "other_observation_index": connected[left][0]}
                     )
 
         groups: dict[int, list[int]] = {}
@@ -181,6 +204,14 @@ class ObservationGrouper:
             "chip_id": cls._normalize_numeric(ids.get("ChipID") or ids.get("CPID")),
             "board_id": cls._normalize_numeric(ids.get("BoardId") or ids.get("BDID")),
         }
+
+    @classmethod
+    def _correlation_token(cls, observation: TransportObservation) -> str:
+        return cls._normalize(
+            observation.identifiers.get("correlation_token")
+            or observation.capabilities.get("correlation_token")
+            or observation.capabilities.get("session_id")
+        )
 
     @classmethod
     def _observation_fingerprint(cls, observation: TransportObservation) -> str:
