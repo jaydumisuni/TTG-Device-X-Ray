@@ -11,6 +11,7 @@ class AdbProbe:
     """Read-only Android probe with identity, storage and partition intelligence."""
 
     name = "adb"
+    KERNEL_SECTOR_BYTES = 512
 
     PROPERTY_KEYS = {
         "brand": "ro.product.brand",
@@ -229,7 +230,7 @@ done'''
                 continue
             name, path, target, sectors, block_size, read_only = parts
             sector_count = int(sectors) if sectors.isdigit() else 0
-            logical = int(block_size) if block_size.isdigit() else 512
+            logical = int(block_size) if block_size.isdigit() else cls.KERNEL_SECTOR_BYTES
             partitions.append(
                 {
                     "name": name,
@@ -238,7 +239,7 @@ done'''
                     "block_device": target.rsplit("/", 1)[-1],
                     "sector_count": sector_count,
                     "logical_block_size": logical,
-                    "size_bytes": sector_count * logical,
+                    "size_bytes": sector_count * cls.KERNEL_SECTOR_BYTES,
                     "read_only": read_only == "1",
                     "slot": cls._slot_for_name(name),
                     "risk": cls._risk_for_partition(name),
@@ -268,8 +269,8 @@ done'''
                 )
         return partitions
 
-    @staticmethod
-    def _parse_storage_inventory(text: str) -> list[dict[str, Any]]:
+    @classmethod
+    def _parse_storage_inventory(cls, text: str) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for line in text.splitlines():
             fields = line.strip().split("|")
@@ -277,7 +278,7 @@ done'''
                 continue
             block, sectors, logical, model, raw_type = fields
             sector_count = int(sectors) if sectors.isdigit() else 0
-            block_size = int(logical) if logical.isdigit() else 512
+            block_size = int(logical) if logical.isdigit() else cls.KERNEL_SECTOR_BYTES
             lowered = " ".join([block, model, raw_type]).lower()
             if "mmc" in lowered:
                 storage_type = "eMMC"
@@ -292,7 +293,7 @@ done'''
                     "block": block,
                     "sector_count": sector_count,
                     "logical_block_size": block_size,
-                    "capacity_bytes": sector_count * block_size,
+                    "capacity_bytes": sector_count * cls.KERNEL_SECTOR_BYTES,
                     "model": model.strip(),
                     "type": storage_type,
                 }
