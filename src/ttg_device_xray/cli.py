@@ -13,6 +13,7 @@ from .hunter_bridge import HunterBridge, HunterDelivery
 from .pipeline import write_bundle
 from .platform_tools import PlatformToolsRunner
 from .profile_loader import ProfileLoader
+from .repair_readiness import build_repair_readiness
 from .transports.adb import AdbProbe
 from .transports.apple import AppleProbe
 from .transports.fastboot import FastbootProbe
@@ -160,7 +161,10 @@ def main(argv: list[str] | None = None) -> int:
 
     profile_loader = ProfileLoader(args.profile_dir)
     profile_loader.apply_bundle_matches(bundle)
-    bundle.plan["profile_match"] = bundle.profile_match.to_dict()
+    profile_payload = bundle.profile_match.to_dict()
+    repair_readiness = build_repair_readiness(profile_payload)
+    bundle.plan["profile_match"] = profile_payload
+    bundle.plan["repair_readiness"] = repair_readiness
     if bundle.profile_match.status == "MATCHED":
         bundle.plan["recommended_profile"] = bundle.profile_match.profile_id
         bundle.plan["adapter_contracts"] = bundle.profile_match.adapter_contracts
@@ -190,12 +194,14 @@ def main(argv: list[str] | None = None) -> int:
                 "candidate_count": len(bundle.candidates),
                 "selected_candidate_id": bundle.selected_candidate_id,
                 "verdict": bundle.certification.verdict.value,
+                "certification_scope": "DEVICE_IDENTITY_EVIDENCE",
                 "confidence": bundle.certification.confidence,
                 "certification_dimensions": bundle.certification.dimensions.to_dict(),
                 "identity": bundle.identity.to_dict(),
                 "firmware_fingerprint": bundle.firmware.fingerprint_sha256,
                 "storage": bundle.storage.to_dict(),
-                "profile_match": bundle.profile_match.to_dict(),
+                "profile_match": profile_payload,
+                "repair_readiness": repair_readiness,
                 "hunter_delivery": delivery.to_dict(),
                 "bundle_seal": seal,
                 "output": str(target),
