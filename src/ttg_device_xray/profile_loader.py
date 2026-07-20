@@ -118,12 +118,8 @@ class ProfileLoader:
         storage: StorageSummary,
         observations: list[TransportObservation],
     ) -> ProfileMatch:
-        candidates = [
-            self._score(profile, requested, identity, storage, observations)
-            for profile in self.load()
-        ]
-        candidates = [item for item in candidates if item.profile_id]
-        if not candidates:
+        profiles = self.load()
+        if not profiles:
             return ProfileMatch(
                 status="NO_PROFILE",
                 requested_profile_id=requested,
@@ -131,11 +127,53 @@ class ProfileLoader:
                 write_allowed=False,
             )
 
-        best = max(candidates, key=lambda item: item.confidence)
+        routed = [
+            profile
+            for profile in profiles
+            if self._route_profile(profile, requested=requested, identity=identity)
+        ]
+        if not routed:
+            proposed = requested or "<none>"
+            return ProfileMatch(
+                status="NO_MATCH",
+                requested_profile_id=requested,
+                stage="UNAVAILABLE",
+                confidence=0.0,
+                reasons=[
+                    "Device identity was certified, but no compatible repair profile exists."
+                ],
+                mismatches=[f"proposed_profile_id: {proposed}"],
+                write_allowed=False,
+            )
+
+        scored = [
+            (
+                profile,
+                self._score(profile, requested, identity, storage, observations),
+            )
+            for profile in routed
+        ]
+        scored = [(profile, item) for profile, item in scored if item.profile_id]
+        if not scored:
+            return ProfileMatch(
+                status="NO_MATCH",
+                requested_profile_id=requested,
+                reasons=["Compatible profile routes did not produce a score."],
+                write_allowed=False,
+            )
+
+        loaded, best = max(scored, key=lambda pair: pair[1].confidence)
+        approval = str(loaded.data.get("approval", "approved")).strip().lower()
         if best.confidence >= 0.80:
-            best.status = "MATCHED"
+            if approval in {"candidate", "discovery", "unapproved", "review"}:
+                best.status = "CANDIDATE_PROFILE"
+                best.reasons.append("profile_registry_candidate")
+                best.adapter_contracts = {}
+            else:
+                best.status = "MATCHED"
         elif best.confidence >= 0.55:
             best.status = "CANDIDATE"
+            best.adapter_contracts = {}
         else:
             best.status = "NO_MATCH"
             best.profile_id = None
@@ -311,6 +349,75 @@ class ProfileLoader:
             transport_priority=priority,
             write_allowed=False,
         )
+
+    def _route_profile(
+        self,
+        loaded: LoadedProfile,
+        *,
+        requested: str,
+        identity: DeviceIdentity,
+    ) -> bool:
+        """Reject unrelated profiles before evidence scoring.
+
+        Scoring answers how well a compatible profile matches. Routing first
+        answers whether the profile belongs to the same device family at all.
+        This prevents an unrelated profile from being shown as the source of a
+        low-confidence NO_MATCH result.
+        """
+
+        profile = loaded.data
+        profile_id = str(profile.get("profile_id", "")).strip()
+        aliases = {self._norm(item) for item in profile.get("aliases", []) if item}
+        ids = {self._norm(profile_id), *aliases}
+        match = profile.get("match", {}) if isinstance(profile.get("match"), dict) else {}
+
+        if not self._set_gate(identity.platform, match.get("platforms", [])):
+            return False
+        brands = match.get("brands", profile.get("brands", []))
+        if not self._set_gate(identity.brand, brands):
+            return False
+
+        exact_request = bool(requested and self._norm(requested) in ids)
+        identity_routes = [
+            self._set_match(identity.internal_model, match.get("internal_models", [])),
+            self._set_match(identity.chipset, match.get("chipsets", [])),
+            self._regex_match(identity.board, match.get("board_patterns", [])),
+        ]
+        return exact_request or any(identity_routes)
+
+    @classmethod
+    def _set_gate(cls, observed: str, expected: Any) -> bool:
+        values = (
+            {cls._norm(item) for item in expected if item}
+            if isinstance(expected, list)
+            else set()
+        )
+        if not values:
+            return True
+        normalized = cls._norm(observed)
+        return bool(normalized and normalized in values)
+
+    @classmethod
+    def _set_match(cls, observed: str, expected: Any) -> bool:
+        values = (
+            {cls._norm(item) for item in expected if item}
+            if isinstance(expected, list)
+            else set()
+        )
+        normalized = cls._norm(observed)
+        return bool(values and normalized and normalized in values)
+
+    @staticmethod
+    def _regex_match(observed: str, patterns: Any) -> bool:
+        if not observed or not isinstance(patterns, list):
+            return False
+        for pattern in patterns:
+            try:
+                if re.search(str(pattern), observed):
+                    return True
+            except re.error:
+                continue
+        return False
 
     @classmethod
     def _add_set_rule(
