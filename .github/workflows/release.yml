@@ -59,14 +59,34 @@ jobs:
 
       - name: Build release artifacts
         run: |
-          rm -rf dist
+          rm -rf dist release-windows
           python -m build
           python -m twine check dist/*
 
+      - name: Build one-click Windows bundle
+        shell: bash
+        run: |
+          mkdir -p release-windows
+          cp packaging/windows/RUN_XRAY_FOR_TTG_UNLOCK.bat release-windows/
+          cp dist/*.whl release-windows/
+          cat > release-windows/README.txt <<'EOF'
+          TTG DEVICE X-RAY - WINDOWS RELEASE
+
+          1. Extract the complete ZIP.
+          2. Copy the extracted folder into TTG_UNLOCK_V3, or place it beside TTG_UNLOCK_V3.
+          3. Double-click RUN_XRAY_FOR_TTG_UNLOCK.bat.
+          4. The launcher creates a private runtime, installs the bundled X-Ray package and dependencies,
+             then writes the device scan bundle into TTG_UNLOCK_V3\scans.
+          5. Run TTG UNLOCK V3 again.
+
+          Internet is only needed when pip must obtain third-party Python dependencies.
+          The TTG Device X-Ray wheel itself is included in this ZIP.
+          EOF
+          (cd release-windows && zip -r "../TTG-Device-XRay-${RELEASE_TAG}-Windows.zip" .)
+
       - name: Generate checksums
         run: |
-          cd dist
-          sha256sum * > ../SHA256SUMS
+          sha256sum dist/* "TTG-Device-XRay-${RELEASE_TAG}-Windows.zip" > SHA256SUMS
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v7
@@ -74,6 +94,7 @@ jobs:
           name: ttg-device-xray-${{ env.RELEASE_TAG }}
           path: |
             dist/*
+            TTG-Device-XRay-${{ env.RELEASE_TAG }}-Windows.zip
             SHA256SUMS
           if-no-files-found: error
           retention-days: 30
@@ -81,7 +102,9 @@ jobs:
       - name: Attest release provenance
         uses: actions/attest@v4
         with:
-          subject-path: dist/*
+          subject-path: |
+            dist/*
+            TTG-Device-XRay-${{ env.RELEASE_TAG }}-Windows.zip
           create-storage-record: false
 
       - name: Create GitHub release
@@ -90,6 +113,7 @@ jobs:
         run: |
           gh release create "$RELEASE_TAG" \
             dist/* \
+            "TTG-Device-XRay-${RELEASE_TAG}-Windows.zip" \
             SHA256SUMS \
             --generate-notes \
             --verify-tag \
