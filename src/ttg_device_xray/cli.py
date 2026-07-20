@@ -8,11 +8,16 @@ from pathlib import Path
 from .analyzers.ipsw import IpswAnalysisError, write_ipsw_report
 from .command import CommandRunner
 from .enhanced_pipeline import EnhancedXRayPipeline
+from .hunter_bridge import HunterBridge, HunterDelivery
 from .pipeline import write_bundle
+from .profile_loader import ProfileLoader
 from .transports.adb import AdbProbe
 from .transports.apple import AppleProbe
 from .transports.fastboot import FastbootProbe
 from .transports.mtk_meta import MtkMetaProbe
+from .transports.qualcomm_edl import QualcommEdlProbe
+from .transports.samsung_download import SamsungDownloadProbe
+from .transports.spd import SpdDownloadProbe
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -22,6 +27,23 @@ def build_parser() -> argparse.ArgumentParser:
     scan = subparsers.add_parser("scan", help="Run a read-only device scan")
     scan.add_argument("--output", type=Path, default=Path("scans"))
     scan.add_argument("--mission", default="identify-and-plan")
+    scan.add_argument(
+        "--profile-dir",
+        type=Path,
+        action="append",
+        default=[],
+        help="Additional profile directory; may be supplied more than once",
+    )
+    scan.add_argument(
+        "--no-hunter",
+        action="store_true",
+        help="Do not post this scan to Hunter",
+    )
+    scan.add_argument(
+        "--hunter-required",
+        action="store_true",
+        help="Return a non-zero exit code when Hunter delivery fails",
+    )
 
     ipsw = subparsers.add_parser(
         "inspect-ipsw", help="Inspect an Apple IPSW BuildManifest without restoring"
@@ -31,6 +53,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("doctor", help="Check local transport tools")
     return parser
+
+
+def _helper_status(prefix: str) -> dict[str, bool]:
+    return {
+        "helper_configured": bool(os.environ.get(f"{prefix}_HELPER", "").strip()),
+        "evidence_file_configured": bool(
+            os.environ.get(f"{prefix}_EVIDENCE_FILE", "").strip()
+        ),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,20 +79,41 @@ def main(argv: list[str] | None = None) -> int:
                 "irecovery",
                 "powershell",
                 "pwsh",
+                "lsusb",
             )
         }
         print(
             json.dumps(
                 {
                     "tools": tools,
-                    "mtk_meta": {
-                        "helper_configured": bool(
-                            os.environ.get("TTG_MTK_META_HELPER", "").strip()
+                    "transports": {
+                        "mtk_meta": {
+                            **_helper_status("TTG_MTK_META"),
+                            "supported_vid_pid": ["0E8D:2000", "0E8D:2007"],
+                        },
+                        "qualcomm_edl": {
+                            **_helper_status("TTG_QUALCOMM_EDL"),
+                            "primary_vid_pid": "05C6:9008",
+                        },
+                        "spd_download": {
+                            **_helper_status("TTG_SPD"),
+                            "vendor_hint": "1782",
+                        },
+                        "samsung_download": {
+                            **_helper_status("TTG_SAMSUNG_DOWNLOAD"),
+                            "vendor_hint": "04E8",
+                        },
+                    },
+                    "profiles": {
+                        "extra_directory_configured": bool(
+                            os.environ.get("TTG_XRAY_PROFILE_DIR", "").strip()
+                        )
+                    },
+                    "hunter": {
+                        "endpoint": HunterBridge._endpoint(),
+                        "token_configured": bool(
+                            os.environ.get("TTG_HUNTER_TOKEN", "").strip()
                         ),
-                        "evidence_file_configured": bool(
-                            os.environ.get("TTG_MTK_META_EVIDENCE_FILE", "").strip()
-                        ),
-                        "supported_vid_pid": ["0E8D:2000", "0E8D:2007"],
                     },
                 },
                 indent=2,
@@ -83,11 +135,38 @@ def main(argv: list[str] | None = None) -> int:
             AdbProbe(runner),
             FastbootProbe(runner),
             MtkMetaProbe(runner),
+            QualcommEdlProbe(runner),
+            SpdDownloadProbe(runner),
+            SamsungDownloadProbe(runner),
             AppleProbe(runner),
         ]
     )
     bundle = pipeline.scan(mission=args.mission)
+
+    profile_loader = ProfileLoader(args.profile_dir)
+    bundle.profile_match = profile_loader.match_bundle(bundle)
+    bundle.plan["profile_match"] = bundle.profile_match.to_dict()
+    if bundle.profile_match.status == "MATCHED":
+        bundle.plan["recommended_profile"] = bundle.profile_match.profile_id
+        bundle.plan["adapter_contracts"] = bundle.profile_match.adapter_contracts
+        bundle.plan["transport_priority"] = bundle.profile_match.transport_priority
+
     target = write_bundle(bundle, args.output)
+    profile_loader.write_match(bundle, target)
+
+    if args.no_hunter:
+        delivery = HunterDelivery(
+            attempted=False,
+            delivered=False,
+            endpoint=HunterBridge._endpoint(),
+            error="disabled by --no-hunter",
+        )
+        (target / "hunter_delivery.json").write_text(
+            json.dumps(delivery.to_dict(), indent=2), encoding="utf-8"
+        )
+    else:
+        delivery = HunterBridge().deliver(bundle, target)
+
     print(
         json.dumps(
             {
@@ -97,11 +176,16 @@ def main(argv: list[str] | None = None) -> int:
                 "identity": bundle.identity.to_dict(),
                 "firmware_fingerprint": bundle.firmware.fingerprint_sha256,
                 "storage": bundle.storage.to_dict(),
+                "profile_match": bundle.profile_match.to_dict(),
+                "hunter_delivery": delivery.to_dict(),
                 "output": str(target),
             },
             indent=2,
         )
     )
+
+    if args.hunter_required and not delivery.delivered:
+        return 3
     return 0 if bundle.certification.verdict.value != "UNSAFE" else 2
 
 
