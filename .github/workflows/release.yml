@@ -2,14 +2,12 @@ name: Release
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*.*.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: Release version, for example v0.4.0
+        description: Approved production release version, for example v0.4.3
         required: true
         type: string
 
@@ -20,7 +18,7 @@ permissions:
   artifact-metadata: write
 
 concurrency:
-  group: release-${{ github.ref }}-${{ inputs.tag || 'automatic' }}
+  group: release-${{ github.ref }}-${{ inputs.tag || 'tag' }}
   cancel-in-progress: false
 
 env:
@@ -30,7 +28,7 @@ env:
 
 jobs:
   release:
-    name: Build and publish Windows release
+    name: Build and publish approved Windows release
     runs-on: windows-latest
     timeout-minutes: 35
 
@@ -47,19 +45,19 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      - name: Resolve release tag
+      - name: Resolve and enforce production release tag
         shell: pwsh
         run: |
           if ($env:GITHUB_REF_TYPE -eq "tag") {
             $tag = $env:GITHUB_REF_NAME
-          } elseif ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
-            $tag = "${{ inputs.tag }}"
           } else {
-            $version = python -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])"
-            $tag = "v$version"
+            $tag = "${{ inputs.tag }}"
+          }
+          if ($tag -match '(?i)(dev|alpha|beta|rc|test|internal)') {
+            throw "Development or pre-release tags cannot publish to the public product repository: $tag"
           }
           "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Release tag: $tag"
+          Write-Host "Approved production release tag: $tag"
 
       - name: Install project and packaging tools
         shell: pwsh
