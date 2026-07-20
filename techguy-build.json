@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "projectName": "TTG Device X-Ray",
+  "projectType": "python-qt",
+  "output": "dist-exe",
+  "maintenance": {
+    "enabled": true,
+    "tool_id": "ttg-device-xray",
+    "display_name": "TTG Device X-Ray",
+    "channel": "dev",
+    "version": "0.4.3-dev.1",
+    "entry_executable": "TTG-Device-XRay.exe",
+    "output_directory": "dist-exe",
+    "dev_repository": "jaydumisuni/tools-test-repo",
+    "production_repository": "jaydumisuni/TTG-Device-X-Ray",
+    "check_on_launch": true,
+    "auto_apply": true,
+    "check_timeout_seconds": 10,
+    "early_health_seconds": 8,
+    "keep_rollback": true,
+    "require_authenticode": false,
+    "hunter": {
+      "enabled": false,
+      "endpoint": "",
+      "route": "device-xray"
+    },
+    "reporting": {
+      "enabled": true,
+      "github_direct_when_authenticated": true,
+      "github_repository": "jaydumisuni/tools-test-repo",
+      "privacy_profile": "strict"
+    }
+  }
+}
