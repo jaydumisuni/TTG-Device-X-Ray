@@ -46,13 +46,17 @@ class AdbProbe:
     PARTITION_SCRIPT = r'''for p in /dev/block/by-name/*; do
 n=${p##*/}; t=$(readlink -f "$p" 2>/dev/null); [ -n "$t" ] || continue
 b=${t##*/}; s=$(cat "/sys/class/block/$b/size" 2>/dev/null); l=$(cat "/sys/class/block/$b/queue/logical_block_size" 2>/dev/null); r=$(cat "/sys/class/block/$b/ro" 2>/dev/null)
+if [ -z "$s" ] && command -v blockdev >/dev/null 2>&1; then bytes=$(blockdev --getsize64 "$t" 2>/dev/null); case "$bytes" in ''|*[!0-9]*) ;; *) s=$((bytes / 512));; esac; fi
 printf '%s|%s|%s|%s|%s|%s\n' "$n" "$p" "$t" "$s" "$l" "$r"
 done'''
 
-    STORAGE_SCRIPT = r'''for b in mmcblk0 sda sdb nvme0n1; do
-p="/sys/class/block/$b"; [ -e "$p" ] || continue
-s=$(cat "$p/size" 2>/dev/null); l=$(cat "$p/queue/logical_block_size" 2>/dev/null)
-m=$(cat "$p/device/model" 2>/dev/null || cat "$p/device/name" 2>/dev/null)
+    STORAGE_SCRIPT = r'''for p in /sys/class/block/*; do
+[ -e "$p" ] || continue; b=${p##*/}
+[ -e "$p/partition" ] && continue
+case "$b" in loop*|ram*|zram*|dm-*|sr*) continue;; esac
+s=$(cat "$p/size" 2>/dev/null); case "$s" in ''|*[!0-9]*|0) continue;; esac
+l=$(cat "$p/queue/logical_block_size" 2>/dev/null)
+m=$(cat "$p/device/model" 2>/dev/null || cat "$p/device/name" 2>/dev/null); m=$(printf '%s' "$m" | tr '\n' ' ')
 t=$(cat "$p/device/type" 2>/dev/null)
 printf '%s|%s|%s|%s|%s\n' "$b" "$s" "$l" "$m" "$t"
 done'''
@@ -155,6 +159,16 @@ done'''
                 observation.identifiers["storage_capacity_bytes"] = str(
                     primary.get("capacity_bytes", 0)
                 )
+            else:
+                inferred = self._infer_storage_from_partitions(observation.partitions)
+                if inferred:
+                    observation.capabilities["storage"] = inferred
+                    observation.capabilities["storage_inferred"] = True
+                    observation.identifiers["storage_type"] = inferred["type"]
+                    observation.warnings.append(
+                        "Storage technology was inferred from partition backing devices; "
+                        "model and capacity remain unverified."
+                    )
 
             mounts = self._adb(serial, "shell", "cat", "/proc/mounts")
             observation.commands.append(mounts)
@@ -173,6 +187,9 @@ done'''
                 ) or any(item.get("name") == "super" for item in observation.partitions)
 
             observation.capabilities["partition_count"] = len(observation.partitions)
+            observation.capabilities["sized_partition_count"] = sum(
+                1 for item in observation.partitions if int(item.get("size_bytes", 0) or 0) > 0
+            )
             observation.capabilities["ab_slots"] = self._has_ab_slots(
                 observation.partitions,
                 observation.identifiers.get("slot_suffix", ""),
@@ -256,11 +273,13 @@ done'''
             match = pattern.search(line)
             if match:
                 name = match.group("name")
+                target = match.group("target").strip()
                 partitions.append(
                     {
                         "name": name,
                         "path": f"/dev/block/by-name/{name}",
-                        "target": match.group("target").strip(),
+                        "target": target,
+                        "block_device": target.rsplit("/", 1)[-1],
                         "size_bytes": 0,
                         "slot": cls._slot_for_name(name),
                         "risk": cls._risk_for_partition(name),
@@ -296,9 +315,36 @@ done'''
                     "capacity_bytes": sector_count * cls.KERNEL_SECTOR_BYTES,
                     "model": model.strip(),
                     "type": storage_type,
+                    "source": "adb-sysfs-block",
                 }
             )
         return result
+
+    @classmethod
+    def _infer_storage_from_partitions(
+        cls, partitions: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        blocks = {
+            str(item.get("block_device") or item.get("target", "").rsplit("/", 1)[-1])
+            for item in partitions
+        }
+        if any(re.fullmatch(r"sd[a-z](?:\d+)?", block) for block in blocks):
+            storage_type = "UFS"
+        elif any(block.startswith("mmcblk") for block in blocks):
+            storage_type = "eMMC"
+        elif any(block.startswith("nvme") for block in blocks):
+            storage_type = "NVMe"
+        else:
+            return {}
+        return {
+            "block": "inferred-from-partitions",
+            "sector_count": 0,
+            "logical_block_size": 0,
+            "capacity_bytes": 0,
+            "model": "",
+            "type": storage_type,
+            "source": "adb-partition-backing-device",
+        }
 
     @staticmethod
     def _select_primary_storage(items: list[dict[str, Any]]) -> dict[str, Any]:
