@@ -9,7 +9,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QSettings, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import QUrl
 
 from .cli import main as cli_main
 
@@ -77,19 +76,16 @@ def find_unlock_roots() -> list[Path]:
             candidates.append(parent)
             candidates.extend(parent / name for name in names)
 
-    roots = [path for path in _unique_existing(candidates) if _looks_like_unlock_root(path)]
-    return roots
+    return [path for path in _unique_existing(candidates) if _looks_like_unlock_root(path)]
 
 
 def default_output_directory() -> Path:
     configured = os.environ.get("TTG_UNLOCK_SCANS_DIR", "").strip()
     if configured:
         return Path(configured).expanduser()
-
     roots = find_unlock_roots()
     if roots:
         return roots[0] / "scans"
-
     return Path.home() / "Documents" / "THETECHGUY" / "TTG Device X-Ray" / "scans"
 
 
@@ -112,11 +108,12 @@ def configure_transport_path(output_directory: Path) -> list[Path]:
             if (folder / "adb.exe").exists() or (folder / "adb").exists():
                 discovered.append(folder.resolve())
 
+    discovered = _unique_existing(discovered)
     if discovered:
         current = os.environ.get("PATH", "")
-        prefix = os.pathsep.join(str(path) for path in _unique_existing(discovered))
+        prefix = os.pathsep.join(str(path) for path in discovered)
         os.environ["PATH"] = prefix + os.pathsep + current
-    return _unique_existing(discovered)
+    return discovered
 
 
 class ScanWorker(QObject):
@@ -143,12 +140,7 @@ class ScanWorker(QObject):
             self.status.emit("Scanning connected devices using read-only probes...")
             with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
                 code = cli_main(
-                    [
-                        "scan",
-                        "--output",
-                        str(self.output_directory),
-                        "--no-hunter",
-                    ]
+                    ["scan", "--output", str(self.output_directory), "--no-hunter"]
                 )
             self.finished.emit(int(code), stream.getvalue().strip())
         except BaseException:
@@ -163,7 +155,6 @@ class MainWindow(QMainWindow):
         self.settings = QSettings(ORG_NAME, APP_NAME)
         self.thread: QThread | None = None
         self.worker: ScanWorker | None = None
-
         self.setWindowTitle(f"{APP_NAME} — Read-Only Device Intelligence")
         self.setMinimumSize(760, 570)
         self.resize(880, 650)
@@ -244,7 +235,6 @@ class MainWindow(QMainWindow):
         self.log.setReadOnly(True)
         self.log.setPlaceholderText("Scan details will appear here.")
         layout.addWidget(self.log, 1)
-
         self.setCentralWidget(root)
 
     def _apply_style(self) -> None:
@@ -256,23 +246,21 @@ class MainWindow(QMainWindow):
             QLabel#Subtitle { color: #a9b7c9; font-size: 13px; }
             QLabel#SectionTitle { color: white; font-size: 13px; font-weight: 700; }
             QLabel#Status, QLabel#Result { color: #b9c9dc; font-size: 13px; }
-            QFrame#Card { background: #111823; border: 1px solid #223145; border-radius: 10px; }
-            QLineEdit, QTextEdit {
-                background: #0c121b; border: 1px solid #29394f; border-radius: 7px;
-                padding: 9px; color: #eaf2ff; selection-background-color: #147ea8;
-            }
-            QPushButton {
-                background: #1a2635; border: 1px solid #334a64; border-radius: 7px;
-                padding: 10px 14px; color: #eaf2ff; font-weight: 600;
-            }
+            QFrame#Card { background: #111823; border: 1px solid #223145;
+                          border-radius: 10px; }
+            QLineEdit, QTextEdit { background: #0c121b; border: 1px solid #29394f;
+                                   border-radius: 7px; padding: 9px; color: #eaf2ff; }
+            QPushButton { background: #1a2635; border: 1px solid #334a64;
+                          border-radius: 7px; padding: 10px 14px; color: #eaf2ff;
+                          font-weight: 600; }
             QPushButton:hover { background: #22344a; }
             QPushButton:disabled { color: #6d7c8f; background: #151c26; }
-            QPushButton#PrimaryButton {
-                background: #0c85b6; border-color: #35c9ff; color: white;
-                font-size: 14px; font-weight: 800; padding: 13px;
-            }
+            QPushButton#PrimaryButton { background: #0c85b6; border-color: #35c9ff;
+                                        color: white; font-size: 14px; font-weight: 800;
+                                        padding: 13px; }
             QPushButton#PrimaryButton:hover { background: #109bcf; }
-            QProgressBar { border: 0; background: #151d28; height: 5px; border-radius: 2px; }
+            QProgressBar { border: 0; background: #151d28; height: 5px;
+                           border-radius: 2px; }
             QProgressBar::chunk { background: #35c9ff; border-radius: 2px; }
             """
         )
