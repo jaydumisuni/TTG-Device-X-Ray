@@ -1,7 +1,7 @@
 import json
 
 from ttg_device_xray.enhanced_pipeline import EnhancedXRayPipeline
-from ttg_device_xray.models import TransportKind, TransportObservation
+from ttg_device_xray.models import TransportKind
 from ttg_device_xray.transports.mtk_meta import MtkMetaProbe
 
 

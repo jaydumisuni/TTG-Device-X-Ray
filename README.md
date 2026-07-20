@@ -1,14 +1,16 @@
 # TTG Device X-Ray
 
+[![CI](https://github.com/jaydumisuni/TTG-Device-X-Ray/actions/workflows/ci.yml/badge.svg)](https://github.com/jaydumisuni/TTG-Device-X-Ray/actions/workflows/ci.yml)
+
 TTG Device X-Ray is the read-first device intelligence layer for THETECHGUY DIGITAL SOLUTIONS.
 It identifies Android and Apple devices, records transport evidence, maps accessible storage,
-challenges conflicting identity signals, matches reviewed device profiles, and produces an auditable
+challenges conflicting identity signals, resolves reviewed device profiles, and produces an auditable
 repair, flash, or unbrick recommendation.
 
 ## Core rule
 
 > X-Ray may observe, identify, correlate, challenge, certify, match profiles, and recommend. It does
-> not perform destructive writes. Reviewed repair adapters consume its certified evidence package.
+> not perform destructive writes. Reviewed repair adapters consume its sealed evidence package.
 
 ## Active transports
 
@@ -22,51 +24,74 @@ repair, flash, or unbrick recommendation.
 - Apple Recovery / DFU through `irecovery`
 
 Every emergency/download probe supports an optional read-only JSON helper and offline evidence
-fixture. No probe uploads a programmer, sends an FDL, reads PIT automatically, flashes, formats, or
-writes a partition.
+fixture. No probe uploads a programmer, sends an FDL, writes PIT, flashes, formats, resets, or writes
+a device partition.
 
 ## Pipeline
 
 ```text
-PROBE -> MAP -> CORRELATE -> CHALLENGE -> CERTIFY -> PROFILE -> PLAN -> HUNTER
+PROBE
+-> NORMALIZE
+-> GROUP PHYSICAL DEVICES
+-> CORRELATE IDENTITY
+-> BUILD FIRMWARE FINGERPRINT
+-> BUILD STORAGE SUMMARY
+-> CHALLENGE
+-> CERTIFY BY DIMENSION
+-> RESOLVE REVIEWED PROFILE
+-> PLAN
+-> HUNTER
+-> SEAL EVIDENCE BUNDLE
 ```
+
+When multiple physical-device candidates are connected, the workstation-level result is `UNSAFE`.
+Each candidate still receives separate evidence, but no repair profile is selected until a
+single-device scan is produced.
 
 Certification verdicts:
 
 - `CERTIFIED`: identity evidence is coherent and sufficiently strong.
 - `INVESTIGATE`: useful evidence exists, but a technician or Code Agent must resolve ambiguity.
-- `UNSAFE`: identity is unknown or contradictory; no write workflow should be offered.
+- `UNSAFE`: identity is unknown, contradictory, or mixed across devices.
 
-Profile verdicts:
-
-- `MATCHED`: profile evidence is strong enough for planning and adapter routing.
-- `CANDIDATE`: a likely profile exists but needs more evidence.
-- `NO_MATCH` / `NO_PROFILE`: no profile should be trusted for routing.
-
-A profile never authorizes writing. `write_allowed` remains `false` throughout X-Ray.
-
-## Current intelligence
-
-Android scans can collect:
-
-- brand, model, internal device, board, SoC, build, fingerprint and security patch
-- baseband, bootloader, kernel and Verified Boot state
-- eMMC/UFS/NVMe model and capacity where exposed
-- partition paths, block devices, sector counts, logical block sizes and sizes
-- A/B slot and dynamic-partition evidence
-- partition risk classification and cross-transport size conflicts
-- service-mode identity, storage and GPT evidence supplied by read-only helpers
-
-Apple scans can collect normal, Recovery and DFU identity. IPSW archives can be inspected offline
-to extract BuildManifest compatibility keys, ProductTypes, board configurations, chip IDs,
-board IDs, restore behavior and component paths.
+Certification records independent confidence dimensions for identity, transport, firmware, storage,
+partition mapping, profile matching, and freshness. A profile never authorizes writing;
+`write_allowed` remains `false` throughout X-Ray.
 
 ## Install for development
 
 ```powershell
 py -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
+```
+
+Linux or macOS:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e ".[dev]"
+```
+
+## Local quality gate
+
+Run the same deterministic checks used by CI:
+
+```powershell
+python scripts/run_local_checks.py
+```
+
+The gate validates the profile registry, validates offline service-mode fixtures, scans command
+literals for forbidden device-write operations, runs Ruff, executes the test suite, builds the wheel
+and source distribution, and verifies package metadata with Twine.
+
+Individual validators are also available:
+
+```powershell
+python scripts/validate_profiles.py
+python scripts/validate_fixtures.py
+python scripts/check_read_only.py
 ```
 
 ## Run
@@ -92,11 +117,15 @@ $env:TTG_SPD_HELPER='python D:\TTG\helpers\spd_probe.py'
 $env:TTG_SAMSUNG_DOWNLOAD_HELPER='python D:\TTG\helpers\samsung_download_probe.py'
 ```
 
-Each helper receives `--probe-json`, `--read-only`, transport and USB endpoint arguments, then
-returns identity, capabilities and optional partition evidence as JSON. Captured evidence can be
+Each helper receives `--probe-json`, `--read-only`, transport, and USB endpoint arguments, then
+returns identity, capabilities, and optional partition evidence as JSON. Captured evidence can be
 replayed with the matching `*_EVIDENCE_FILE` environment variable.
 
-See `docs/mtk-meta-helper-contract.md` and `docs/service-mode-helper-contract.md`.
+Canonical synthetic fixtures live in `tests/fixtures/` for MTK META, Qualcomm EDL, Unisoc/SPD, and
+Samsung Download Mode. They contain no customer identifiers and require no connected hardware.
+
+See `docs/mtk-meta-helper-contract.md`, `docs/service-mode-helper-contract.md`, and
+`docs/candidate-bundle-v2.md`.
 
 ## Automatic Hunter bridge
 
@@ -111,9 +140,9 @@ $env:TTG_HUNTER_TOKEN='...'
 ttg-xray scan --output scans
 ```
 
-Delivery failures do not lose the scan. The payload is placed in `scans/_hunter_spool/` and the
-bundle receives `hunter_delivery.json`. Raw IMEI, ECID and serial values are hashed by default; set
-`TTG_HUNTER_INCLUDE_SENSITIVE=1` only for an approved internal deployment.
+Delivery failures do not lose the scan. The payload is placed in `scans/_hunter_spool/`, and the
+bundle receives `hunter_delivery.json`. Raw IMEI, ECID, UDID, and serial values are hashed by default.
+Use `TTG_HUNTER_INCLUDE_SENSITIVE=1` only for an approved internal deployment.
 
 Use `--no-hunter` for an intentionally offline scan or `--hunter-required` when delivery must
 succeed.
@@ -124,6 +153,15 @@ succeed.
 scans/<scan-id>/
 ├─ mission.json
 ├─ transport_evidence.json
+├─ candidates.json
+├─ candidates/<candidate-id>/
+│  ├─ device_identity.json
+│  ├─ firmware_fingerprint.json
+│  ├─ storage_summary.json
+│  ├─ partition_map.json
+│  ├─ challenger_findings.json
+│  ├─ certification.json
+│  └─ profile_match.json
 ├─ device_identity.json
 ├─ storage_summary.json
 ├─ partition_map.json
@@ -134,28 +172,31 @@ scans/<scan-id>/
 ├─ recommended_plan.json
 ├─ hunter_payload.json
 ├─ hunter_delivery.json
-└─ audit.jsonl
+├─ audit.jsonl
+├─ bundle_manifest.json
+└─ bundle_manifest.sig
 ```
 
-## Packaged profile fixture
+The manifest records SHA-256 for every completed evidence file, schema and scanner versions, the
+selected candidate ID, creation and expiry times, signer key ID, and the fixed read-only boundary.
+Set `TTG_XRAY_SIGNING_KEY` and `TTG_XRAY_SIGNING_KEY_ID` on an approved workstation to emit a signed
+HMAC manifest. Without a key, the bundle is explicitly marked `UNSIGNED`.
 
-The first packaged profile is `src/ttg_device_xray/profiles/transsion/km7.json`. It matches
-`android:tecno:km7:mt6765` and aliases, checks independent device evidence, records transport
-priority, and exposes adapter contract names for the repair, flash and unbrick planners. Its stage is
-`CANDIDATE`, and it cannot authorize a write.
+## CI and releases
 
-## Tool requirements
+Pull requests and pushes to `main` run:
 
-X-Ray uses tools already present on the workstation when available:
+- deterministic profile, fixture, and read-only boundary validation
+- Ruff checks
+- package build and Twine metadata validation
+- Linux tests on Python 3.10 through 3.14
+- Windows smoke tests and `ttg-xray doctor`
+- one aggregate `CI Gate` result for branch protection
 
-- `adb`
-- `fastboot`
-- Windows PowerShell / PowerShell Core or `lsusb` for service-mode USB inventory
-- `idevice_id` and `ideviceinfo`
-- `irecovery`
-
-Missing tools do not crash the full scan. Their probes report `unavailable`, and the remaining
-transports continue.
+A release is created only from a version tag such as `v0.4.0`. The release workflow reruns the full
+quality gate, verifies that the tag, `pyproject.toml`, and package `__version__` agree, builds wheel and
+source archives, generates SHA-256 checksums, creates provenance attestations, and publishes the
+GitHub Release.
 
 ## Safety boundary
 
@@ -163,3 +204,7 @@ No partition write, FRP clear, MDM removal, activation bypass, programmer upload
 write, or firmware flashing operation belongs in this repository. Those actions must live in
 separately reviewed deterministic adapters that require a certified X-Ray report and their own
 authorization controls.
+
+## License
+
+TTG Device X-Ray is open source under the MIT License. See `LICENSE`.

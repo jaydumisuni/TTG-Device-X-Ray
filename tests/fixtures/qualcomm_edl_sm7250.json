@@ -1,0 +1,49 @@
+{
+  "connected": true,
+  "mode": "edl",
+  "identifiers": {
+    "brand": "FIXTURE",
+    "model_code": "QCOM-SM7250",
+    "chipset": "sm7250",
+    "serial": "FIXTURE-QCOM-9008",
+    "storage_type": "UFS",
+    "storage_model": "UFS-FIXTURE",
+    "storage_capacity_bytes": "128000000000"
+  },
+  "capabilities": {
+    "read_only": true,
+    "protocol_query_completed": true,
+    "partition_map_read": true,
+    "programmer_uploaded": false,
+    "storage": {
+      "type": "UFS",
+      "model": "UFS-FIXTURE",
+      "capacity_bytes": 128000000000,
+      "logical_block_size": 4096
+    }
+  },
+  "partitions": [
+    {
+      "name": "xbl_a",
+      "start_sector": 256,
+      "sector_count": 1024,
+      "logical_block_size": 4096,
+      "size_bytes": 4194304
+    },
+    {
+      "name": "boot_a",
+      "start_sector": 16384,
+      "sector_count": 16384,
+      "logical_block_size": 4096,
+      "size_bytes": 67108864
+    },
+    {
+      "name": "super",
+      "start_sector": 262144,
+      "sector_count": 2097152,
+      "logical_block_size": 4096,
+      "size_bytes": 8589934592
+    }
+  ],
+  "warnings": []
+}
