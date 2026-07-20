@@ -50,27 +50,30 @@ jobs:
         run: python scripts/check_read_only.py
 
       - name: Run Ruff
-        id: ruff
-        continue-on-error: true
-        run: python -m ruff check . --output-format concise | tee ruff-report.txt
+        run: python -m ruff check .
 
-      - name: Upload Ruff report
+      - name: Build and validate package metadata
+        id: package
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          {
+            python -m build --outdir dist-check
+            python -m twine check dist-check/*
+          } 2>&1 | tee package-report.txt
+
+      - name: Upload package report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ruff-report
-          path: ruff-report.txt
+          name: package-report
+          path: package-report.txt
           if-no-files-found: error
           retention-days: 7
 
-      - name: Fail when Ruff reports findings
-        if: steps.ruff.outcome != 'success'
+      - name: Fail when package validation fails
+        if: steps.package.outcome != 'success'
         run: exit 1
-
-      - name: Build and validate package metadata
-        run: |
-          python -m build --outdir dist-check
-          python -m twine check dist-check/*
 
   tests:
     name: Python ${{ matrix.python-version }} tests
