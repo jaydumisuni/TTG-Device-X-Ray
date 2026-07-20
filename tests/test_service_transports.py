@@ -1,5 +1,6 @@
 import json
 
+from ttg_device_xray.enhanced_pipeline import EnhancedXRayPipeline
 from ttg_device_xray.models import TransportKind
 from ttg_device_xray.transports.qualcomm_edl import QualcommEdlProbe
 from ttg_device_xray.transports.samsung_download import SamsungDownloadProbe
@@ -13,6 +14,14 @@ class NoopRunner:
 
     def run(self, command, timeout=20):
         raise AssertionError("runner should not be called for fixture replay")
+
+
+class StaticProbe:
+    def __init__(self, observations):
+        self.observations = observations
+
+    def probe(self):
+        return self.observations
 
 
 def test_windows_pnp_parser_extracts_usb_and_com():
@@ -29,15 +38,29 @@ def test_windows_pnp_parser_extracts_usb_and_com():
     assert endpoint["port"] == "COM19"
 
 
-def test_qualcomm_fixture_is_read_only(tmp_path, monkeypatch):
+def test_qualcomm_fixture_is_read_only_and_correlates(tmp_path, monkeypatch):
     fixture = tmp_path / "edl.json"
     fixture.write_text(
         json.dumps(
             {
                 "connected": True,
                 "mode": "edl",
-                "identifiers": {"chipset": "SM6225", "serial": "EDL-1"},
-                "capabilities": {"sahara_query": True},
+                "identifiers": {
+                    "brand": "TECNO",
+                    "model_code": "CK8n",
+                    "chipset": "SM6225",
+                    "serial": "EDL-1",
+                    "storage_type": "UFS",
+                },
+                "capabilities": {
+                    "sahara_query": True,
+                    "storage": {
+                        "type": "UFS",
+                        "model": "TEST-UFS",
+                        "capacity_bytes": 128000000000,
+                        "logical_block_size": 4096,
+                    },
+                },
                 "partitions": [{"name": "xbl", "size_bytes": "0x100000"}],
             }
         ),
@@ -48,6 +71,13 @@ def test_qualcomm_fixture_is_read_only(tmp_path, monkeypatch):
     assert observation.transport == TransportKind.QUALCOMM_EDL
     assert observation.capabilities["read_only"] is True
     assert observation.partitions[0]["risk"] == "critical"
+
+    bundle = EnhancedXRayPipeline([StaticProbe([observation])]).scan()
+    assert bundle.identity.platform == "android"
+    assert bundle.identity.internal_model == "CK8n"
+    assert bundle.identity.chipset == "SM6225"
+    assert bundle.storage.storage_type == "UFS"
+    assert bundle.certification.write_allowed is False
 
 
 def test_spd_and_samsung_mode_classification():
