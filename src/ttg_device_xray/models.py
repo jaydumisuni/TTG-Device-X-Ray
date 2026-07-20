@@ -66,6 +66,8 @@ class DeviceIdentity:
     board: str = ""
     chipset: str = ""
     serial: str = ""
+    udid: str = ""
+    apple_serial: str = ""
     ecid: str = ""
     imei: str = ""
     firmware_version: str = ""
@@ -131,13 +133,34 @@ class ChallengeFinding:
 
 
 @dataclass(slots=True)
+class CertificationDimensions:
+    identity_confidence: float = 0.0
+    transport_confidence: float = 0.0
+    firmware_confidence: float = 0.0
+    storage_confidence: float = 0.0
+    partition_map_confidence: float = 0.0
+    profile_match_confidence: float = 0.0
+    freshness_confidence: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class Certification:
     verdict: CertificationVerdict
     confidence: float
     reasons: list[str]
     blockers: list[str]
-    profile_id: str | None = None
+    proposed_profile_id: str | None = None
+    dimensions: CertificationDimensions = field(default_factory=CertificationDimensions)
     write_allowed: bool = False
+
+    @property
+    def profile_id(self) -> str | None:
+        """Deprecated compatibility alias; generated IDs are proposals, not matches."""
+
+        return self.proposed_profile_id
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -165,6 +188,36 @@ class ProfileMatch:
 
 
 @dataclass(slots=True)
+class DeviceCandidate:
+    candidate_id: str
+    observation_indexes: list[int]
+    observations: list[TransportObservation]
+    link_confidence: float
+    link_evidence: list[dict[str, Any]]
+    identity: DeviceIdentity
+    firmware: FirmwareFingerprint
+    storage: StorageSummary
+    challenges: list[ChallengeFinding]
+    certification: Certification
+    profile_match: ProfileMatch = field(default_factory=ProfileMatch)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "candidate_id": self.candidate_id,
+            "observation_indexes": self.observation_indexes,
+            "link_confidence": self.link_confidence,
+            "link_evidence": self.link_evidence,
+            "observations": [item.to_dict() for item in self.observations],
+            "identity": self.identity.to_dict(),
+            "firmware": self.firmware.to_dict(),
+            "storage": self.storage.to_dict(),
+            "challenges": [item.to_dict() for item in self.challenges],
+            "certification": self.certification.to_dict(),
+            "profile_match": self.profile_match.to_dict(),
+        }
+
+
+@dataclass(slots=True)
 class ScanBundle:
     scan_id: str
     created_at: str
@@ -177,13 +230,19 @@ class ScanBundle:
     certification: Certification
     plan: dict[str, Any]
     profile_match: ProfileMatch = field(default_factory=ProfileMatch)
+    candidates: list[DeviceCandidate] = field(default_factory=list)
+    selected_candidate_id: str | None = None
+    schema_version: str = "2.0"
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "schema_version": self.schema_version,
             "scan_id": self.scan_id,
             "created_at": self.created_at,
             "mission": self.mission,
             "observations": [item.to_dict() for item in self.observations],
+            "candidates": [item.to_dict() for item in self.candidates],
+            "selected_candidate_id": self.selected_candidate_id,
             "identity": self.identity.to_dict(),
             "firmware": self.firmware.to_dict(),
             "storage": self.storage.to_dict(),

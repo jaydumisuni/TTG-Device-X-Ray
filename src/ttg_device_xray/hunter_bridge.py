@@ -46,7 +46,7 @@ class HunterBridge:
         endpoint = self._endpoint()
         headers = {
             "Content-Type": "application/json",
-            "User-Agent": "TTG-Device-X-Ray/0.3",
+            "User-Agent": "TTG-Device-X-Ray/0.4",
             "X-TTG-Source": "ttg-device-xray",
             "X-TTG-Scan-ID": bundle.scan_id,
         }
@@ -111,30 +111,42 @@ class HunterBridge:
         return delivery
 
     def _payload(self, bundle: ScanBundle) -> dict[str, Any]:
-        identity = bundle.identity.to_dict()
-        sensitive = {
-            "serial": identity.pop("serial", ""),
-            "ecid": identity.pop("ecid", ""),
-            "imei": identity.pop("imei", ""),
-        }
-        if self.include_sensitive:
-            identity.update(sensitive)
-        else:
-            for key, value in sensitive.items():
-                if value:
-                    identity[f"{key}_sha256"] = hashlib.sha256(
-                        value.encode("utf-8")
-                    ).hexdigest()
-                    if key == "imei":
-                        identity["imei_suffix"] = value[-4:]
+        identity = self._privacy_identity(bundle.identity.to_dict())
+        candidate_summaries = []
+        for candidate in bundle.candidates:
+            candidate_summaries.append(
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "observation_indexes": candidate.observation_indexes,
+                    "link_confidence": candidate.link_confidence,
+                    "link_evidence": candidate.link_evidence,
+                    "identity": self._privacy_identity(candidate.identity.to_dict()),
+                    "firmware": candidate.firmware.to_dict(),
+                    "storage": candidate.storage.to_dict(),
+                    "certification": candidate.certification.to_dict(),
+                    "profile_match": candidate.profile_match.to_dict(),
+                    "challenge_codes": [item.code for item in candidate.challenges],
+                    "transports": [
+                        {
+                            "transport": item.transport.value,
+                            "mode": item.mode,
+                            "partition_count": len(item.partitions),
+                        }
+                        for item in candidate.observations
+                    ],
+                }
+            )
 
         return {
             "event": "DEVICE_XRAY_SCAN_COMPLETED",
             "source": "ttg-device-xray",
-            "schema_version": 1,
+            "schema_version": 2,
             "scan_id": bundle.scan_id,
             "created_at": bundle.created_at,
             "mission": bundle.mission,
+            "candidate_count": len(bundle.candidates),
+            "selected_candidate_id": bundle.selected_candidate_id,
+            "candidates": candidate_summaries,
             "certification": bundle.certification.to_dict(),
             "profile_match": bundle.profile_match.to_dict(),
             "identity": identity,
@@ -157,9 +169,37 @@ class HunterBridge:
             "privacy": {
                 "raw_sensitive_identifiers_included": self.include_sensitive,
                 "hash_algorithm": "sha256",
+                "identifier_types_kept_separate": [
+                    "android_serial",
+                    "apple_udid",
+                    "apple_serial",
+                    "apple_ecid",
+                    "imei",
+                ],
             },
             "write_allowed": False,
         }
+
+    def _privacy_identity(self, identity: dict[str, Any]) -> dict[str, Any]:
+        result = dict(identity)
+        sensitive = {
+            "serial": result.pop("serial", ""),
+            "udid": result.pop("udid", ""),
+            "apple_serial": result.pop("apple_serial", ""),
+            "ecid": result.pop("ecid", ""),
+            "imei": result.pop("imei", ""),
+        }
+        if self.include_sensitive:
+            result.update(sensitive)
+        else:
+            for key, value in sensitive.items():
+                if value:
+                    result[f"{key}_sha256"] = hashlib.sha256(
+                        str(value).encode("utf-8")
+                    ).hexdigest()
+                    if key == "imei":
+                        result["imei_suffix"] = str(value)[-4:]
+        return result
 
     @classmethod
     def _endpoint(cls) -> str:
