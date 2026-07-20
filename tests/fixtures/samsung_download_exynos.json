@@ -1,0 +1,52 @@
+{
+  "connected": true,
+  "mode": "download",
+  "identifiers": {
+    "brand": "Samsung",
+    "manufacturer": "Samsung",
+    "model_code": "SM-FIXTURE",
+    "chipset": "exynos-fixture",
+    "serial": "FIXTURE-SAMSUNG-ODIN",
+    "software_version": "FIXTURE-BUILD",
+    "storage_type": "UFS",
+    "storage_model": "UFS-FIXTURE",
+    "storage_capacity_bytes": "128000000000"
+  },
+  "capabilities": {
+    "read_only": true,
+    "protocol_query_completed": true,
+    "partition_map_read": true,
+    "pit_read": false,
+    "odin_command_sent": false,
+    "storage": {
+      "type": "UFS",
+      "model": "UFS-FIXTURE",
+      "capacity_bytes": 128000000000,
+      "logical_block_size": 4096
+    }
+  },
+  "partitions": [
+    {
+      "name": "boot_a",
+      "start_sector": 16384,
+      "sector_count": 16384,
+      "logical_block_size": 4096,
+      "size_bytes": 67108864
+    },
+    {
+      "name": "vbmeta_a",
+      "start_sector": 32768,
+      "sector_count": 256,
+      "logical_block_size": 4096,
+      "size_bytes": 1048576
+    },
+    {
+      "name": "super",
+      "start_sector": 262144,
+      "sector_count": 2097152,
+      "logical_block_size": 4096,
+      "size_bytes": 8589934592
+    }
+  ],
+  "warnings": []
+}
