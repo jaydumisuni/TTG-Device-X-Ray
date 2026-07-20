@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .analyzers.ipsw import IpswAnalysisError, write_ipsw_report
 from .command import CommandRunner
 from .pipeline import XRayPipeline, write_bundle
 from .transports.adb import AdbProbe
@@ -19,6 +20,12 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--output", type=Path, default=Path("scans"))
     scan.add_argument("--mission", default="identify-and-plan")
 
+    ipsw = subparsers.add_parser(
+        "inspect-ipsw", help="Inspect an Apple IPSW BuildManifest without restoring"
+    )
+    ipsw.add_argument("path", type=Path)
+    ipsw.add_argument("--output", type=Path)
+
     subparsers.add_parser("doctor", help="Check local transport tools")
     return parser
 
@@ -33,6 +40,15 @@ def main(argv: list[str] | None = None) -> int:
             for name in ("adb", "fastboot", "idevice_id", "ideviceinfo", "irecovery")
         }
         print(json.dumps({"tools": tools}, indent=2))
+        return 0
+
+    if args.command == "inspect-ipsw":
+        try:
+            report = write_ipsw_report(args.path, args.output)
+        except IpswAnalysisError as exc:
+            print(json.dumps({"error": str(exc)}, indent=2))
+            return 2
+        print(json.dumps(report, indent=2))
         return 0
 
     pipeline = XRayPipeline(
@@ -51,6 +67,8 @@ def main(argv: list[str] | None = None) -> int:
                 "verdict": bundle.certification.verdict.value,
                 "confidence": bundle.certification.confidence,
                 "identity": bundle.identity.to_dict(),
+                "firmware_fingerprint": bundle.firmware.fingerprint_sha256,
+                "storage": bundle.storage.to_dict(),
                 "output": str(target),
             },
             indent=2,
