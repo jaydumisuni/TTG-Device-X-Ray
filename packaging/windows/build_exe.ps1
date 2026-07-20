@@ -14,6 +14,8 @@ if (!(Test-Path $EntryPoint)) {
 }
 
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+New-Item -ItemType Directory -Force -Path $WorkPath | Out-Null
+New-Item -ItemType Directory -Force -Path $SpecPath | Out-Null
 
 $arguments = @(
     "-m", "PyInstaller",
