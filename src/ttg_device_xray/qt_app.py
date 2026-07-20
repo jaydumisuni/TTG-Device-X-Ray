@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import io
-import json
 import os
 import shutil
 import sys
@@ -28,6 +27,13 @@ from PySide6.QtWidgets import (
 )
 
 from .cli import main as cli_main
+from .github_reporter import (
+    DEFAULT_REPORT_REPO,
+    github_cli_status,
+    parse_summary,
+    should_report,
+    submit_failure_report,
+)
 
 APP_NAME = "TTG Device X-Ray"
 ORG_NAME = "THETECHGUY DIGITAL SOLUTIONS"
@@ -37,6 +43,11 @@ def runtime_directory() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path.cwd().resolve()
+
+
+def automatic_reporting_enabled() -> bool:
+    configured = os.environ.get("TTG_XRAY_AUTO_REPORT", "1").strip().lower()
+    return configured not in {"0", "false", "no", "off", "disabled"}
 
 
 def _looks_like_unlock_root(path: Path) -> bool:
@@ -118,15 +129,25 @@ def configure_transport_path(output_directory: Path) -> list[Path]:
 
 class ScanWorker(QObject):
     status = Signal(str)
-    finished = Signal(int, str)
+    finished = Signal(int, str, str)
 
-    def __init__(self, output_directory: Path) -> None:
+    def __init__(
+        self,
+        output_directory: Path,
+        *,
+        report_enabled: bool,
+        report_repo: str,
+    ) -> None:
         super().__init__()
         self.output_directory = output_directory
+        self.report_enabled = report_enabled
+        self.report_repo = report_repo
 
     @Slot()
     def run(self) -> None:
         stream = io.StringIO()
+        code = 1
+        report_url = ""
         try:
             self.output_directory.mkdir(parents=True, exist_ok=True)
             discovered = configure_transport_path(self.output_directory)
@@ -139,14 +160,49 @@ class ScanWorker(QObject):
 
             self.status.emit("Scanning connected devices using read-only probes...")
             with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
-                code = cli_main(
-                    ["scan", "--output", str(self.output_directory), "--no-hunter"]
+                code = int(
+                    cli_main(
+                        ["scan", "--output", str(self.output_directory), "--no-hunter"]
+                    )
                 )
-            self.finished.emit(int(code), stream.getvalue().strip())
         except BaseException:
             stream.write("\n")
             stream.write(traceback.format_exc())
-            self.finished.emit(1, stream.getvalue().strip())
+            code = 1
+
+        console_output = stream.getvalue().strip()
+        summary = parse_summary(console_output)
+        if self.report_enabled and should_report(code, summary):
+            self.status.emit("Failure detected. Sending privacy-safe diagnostics to GitHub...")
+            try:
+                report = submit_failure_report(
+                    summary=summary,
+                    exit_code=code,
+                    console_output=console_output,
+                    output_directory=self.output_directory,
+                    repo=self.report_repo,
+                )
+                report_url = report.url
+                self.status.emit(report.message)
+                console_output += (
+                    "\n\n[AUTO-DIAGNOSTIC]\n"
+                    f"{report.message}\n"
+                    f"Fingerprint: {report.fingerprint}\n"
+                    f"Local report: {report.local_markdown}"
+                )
+                if report.url:
+                    console_output += f"\nGitHub issue: {report.url}"
+            except BaseException:
+                report_error = traceback.format_exc()
+                self.status.emit("Automatic diagnostics reporter failed; scan bundle remains local.")
+                console_output += f"\n\n[AUTO-DIAGNOSTIC ERROR]\n{report_error}"
+        elif should_report(code, summary):
+            console_output += (
+                "\n\n[AUTO-DIAGNOSTIC]\n"
+                "Automatic GitHub reporting is disabled by TTG_XRAY_AUTO_REPORT."
+            )
+
+        self.finished.emit(code, console_output, report_url)
 
 
 class MainWindow(QMainWindow):
@@ -155,9 +211,10 @@ class MainWindow(QMainWindow):
         self.settings = QSettings(ORG_NAME, APP_NAME)
         self.thread: QThread | None = None
         self.worker: ScanWorker | None = None
+        self.last_issue_url = ""
         self.setWindowTitle(f"{APP_NAME} — Read-Only Device Intelligence")
-        self.setMinimumSize(760, 570)
-        self.resize(880, 650)
+        self.setMinimumSize(760, 610)
+        self.resize(900, 700)
         self._build_ui()
         self._apply_style()
         self._load_output_directory()
@@ -187,7 +244,7 @@ class MainWindow(QMainWindow):
         status_card.setObjectName("Card")
         status_layout = QVBoxLayout(status_card)
         status_layout.setContentsMargins(16, 14, 16, 14)
-        self.readiness_label = QLabel("Checking transport readiness...")
+        self.readiness_label = QLabel("Checking transport and repository readiness...")
         self.readiness_label.setObjectName("Status")
         self.readiness_label.setWordWrap(True)
         status_layout.addWidget(self.readiness_label)
@@ -217,8 +274,12 @@ class MainWindow(QMainWindow):
         self.scan_button.clicked.connect(self._start_scan)
         self.open_button = QPushButton("Open Scan Folder")
         self.open_button.clicked.connect(self._open_output)
+        self.issue_button = QPushButton("Open GitHub Issue")
+        self.issue_button.setEnabled(False)
+        self.issue_button.clicked.connect(self._open_last_issue)
         button_row.addWidget(self.scan_button, 1)
         button_row.addWidget(self.open_button)
+        button_row.addWidget(self.issue_button)
         layout.addLayout(button_row)
 
         self.progress = QProgressBar()
@@ -233,7 +294,7 @@ class MainWindow(QMainWindow):
 
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setPlaceholderText("Scan details will appear here.")
+        self.log.setPlaceholderText("Scan details and repository sync status will appear here.")
         layout.addWidget(self.log, 1)
         self.setCentralWidget(root)
 
@@ -279,7 +340,18 @@ class MainWindow(QMainWindow):
         unlock_text = (
             f"TTG Unlock: {unlock_roots[0]}" if unlock_roots else "TTG Unlock: not auto-detected"
         )
-        self.readiness_label.setText(f"{adb_text}\n{unlock_text}\nOutput: {output}")
+        if automatic_reporting_enabled():
+            gh_ready, gh_message = github_cli_status()
+            github_text = (
+                f"GitHub diagnostics: Ready — {DEFAULT_REPORT_REPO}"
+                if gh_ready
+                else f"GitHub diagnostics: Local fallback — {gh_message}"
+            )
+        else:
+            github_text = "GitHub diagnostics: Disabled by TTG_XRAY_AUTO_REPORT"
+        self.readiness_label.setText(
+            f"{adb_text}\n{unlock_text}\n{github_text}\nOutput: {output}"
+        )
 
     @Slot()
     def _browse_output(self) -> None:
@@ -300,6 +372,11 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(output.resolve())))
 
     @Slot()
+    def _open_last_issue(self) -> None:
+        if self.last_issue_url:
+            QDesktopServices.openUrl(QUrl(self.last_issue_url))
+
+    @Slot()
     def _start_scan(self) -> None:
         output_text = self.output_edit.text().strip()
         if not output_text:
@@ -310,12 +387,18 @@ class MainWindow(QMainWindow):
         self.settings.setValue("outputDirectory", str(output))
         self.scan_button.setEnabled(False)
         self.output_edit.setEnabled(False)
+        self.issue_button.setEnabled(False)
+        self.last_issue_url = ""
         self.progress.setRange(0, 0)
         self.result_label.setText("Starting X-Ray...")
         self.log.clear()
 
         self.thread = QThread(self)
-        self.worker = ScanWorker(output)
+        self.worker = ScanWorker(
+            output,
+            report_enabled=automatic_reporting_enabled(),
+            report_repo=DEFAULT_REPORT_REPO,
+        )
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.status.connect(self._append_status)
@@ -330,47 +413,33 @@ class MainWindow(QMainWindow):
         self.result_label.setText(message)
         self.log.append(message)
 
-    @Slot(int, str)
-    def _scan_finished(self, code: int, output: str) -> None:
+    @Slot(int, str, str)
+    def _scan_finished(self, code: int, output: str, report_url: str) -> None:
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
         self.scan_button.setEnabled(True)
         self.output_edit.setEnabled(True)
         self.log.setPlainText(output or "X-Ray completed without console output.")
 
-        summary = self._parse_summary(output)
+        self.last_issue_url = report_url
+        self.issue_button.setEnabled(bool(report_url))
+        summary = parse_summary(output)
         if code == 0:
             verdict = summary.get("verdict", "COMPLETED")
             scan_id = summary.get("scan_id", "")
             self.result_label.setText(f"Scan complete — {verdict} {scan_id}".strip())
         elif code == 2:
+            suffix = " Diagnostics synced to GitHub." if report_url else " Diagnostic saved locally."
             self.result_label.setText(
-                "Scan bundle created, but the evidence verdict is UNSAFE. Review before repair."
+                "Scan bundle created, but the evidence verdict is UNSAFE." + suffix
             )
         else:
-            self.result_label.setText("X-Ray scan failed. Review the details below.")
+            suffix = " Diagnostics synced to GitHub." if report_url else " Diagnostic saved locally."
+            self.result_label.setText("X-Ray scan failed." + suffix)
 
         self._refresh_readiness()
         self.worker = None
         self.thread = None
-
-    @staticmethod
-    def _parse_summary(output: str) -> dict[str, object]:
-        if not output:
-            return {}
-        try:
-            value = json.loads(output)
-            return value if isinstance(value, dict) else {}
-        except json.JSONDecodeError:
-            start = output.find("{")
-            end = output.rfind("}")
-            if start >= 0 and end > start:
-                try:
-                    value = json.loads(output[start : end + 1])
-                    return value if isinstance(value, dict) else {}
-                except json.JSONDecodeError:
-                    return {}
-        return {}
 
 
 def main() -> int:
