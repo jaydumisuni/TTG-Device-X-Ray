@@ -6,10 +6,10 @@ import os
 from pathlib import Path
 
 from .analyzers.ipsw import IpswAnalysisError, write_ipsw_report
+from .bundle_seal import seal_bundle
 from .command import CommandRunner
 from .enhanced_pipeline import EnhancedXRayPipeline
 from .hunter_bridge import HunterBridge, HunterDelivery
-from .models import ProfileMatch
 from .pipeline import write_bundle
 from .profile_loader import ProfileLoader
 from .transports.adb import AdbProbe
@@ -116,6 +116,14 @@ def main(argv: list[str] | None = None) -> int:
                             os.environ.get("TTG_HUNTER_TOKEN", "").strip()
                         ),
                     },
+                    "bundle_seal": {
+                        "signing_key_configured": bool(
+                            os.environ.get("TTG_XRAY_SIGNING_KEY", "").strip()
+                        ),
+                        "signer_key_id": os.environ.get(
+                            "TTG_XRAY_SIGNING_KEY_ID", "ttg-xray-local"
+                        ),
+                    },
                 },
                 indent=2,
             )
@@ -145,16 +153,9 @@ def main(argv: list[str] | None = None) -> int:
     bundle = pipeline.scan(mission=args.mission)
 
     profile_loader = ProfileLoader(args.profile_dir)
-    if bundle.certification.verdict.value == "UNSAFE":
-        bundle.profile_match = ProfileMatch(
-            status="BLOCKED_UNSAFE",
-            requested_profile_id=bundle.certification.profile_id or "",
-            reasons=["Profile routing is blocked because certification is UNSAFE."],
-            write_allowed=False,
-        )
-    else:
-        bundle.profile_match = profile_loader.match_bundle(bundle)
+    profile_loader.apply_bundle_matches(bundle)
     bundle.plan["profile_match"] = bundle.profile_match.to_dict()
+    bundle.plan["certification_dimensions"] = bundle.certification.dimensions.to_dict()
     if bundle.profile_match.status == "MATCHED":
         bundle.plan["recommended_profile"] = bundle.profile_match.profile_id
         bundle.plan["adapter_contracts"] = bundle.profile_match.adapter_contracts
@@ -176,17 +177,22 @@ def main(argv: list[str] | None = None) -> int:
     else:
         delivery = HunterBridge().deliver(bundle, target)
 
+    seal = seal_bundle(target, bundle)
     print(
         json.dumps(
             {
                 "scan_id": bundle.scan_id,
+                "candidate_count": len(bundle.candidates),
+                "selected_candidate_id": bundle.selected_candidate_id,
                 "verdict": bundle.certification.verdict.value,
                 "confidence": bundle.certification.confidence,
+                "certification_dimensions": bundle.certification.dimensions.to_dict(),
                 "identity": bundle.identity.to_dict(),
                 "firmware_fingerprint": bundle.firmware.fingerprint_sha256,
                 "storage": bundle.storage.to_dict(),
                 "profile_match": bundle.profile_match.to_dict(),
                 "hunter_delivery": delivery.to_dict(),
+                "bundle_seal": seal,
                 "output": str(target),
             },
             indent=2,
