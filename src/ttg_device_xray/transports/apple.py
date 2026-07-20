@@ -10,6 +10,7 @@ class AppleProbe:
     LOCKDOWN_KEYS = [
         "ProductType",
         "HardwareModel",
+        "ProductName",
         "ProductVersion",
         "BuildVersion",
         "SerialNumber",
@@ -18,7 +19,13 @@ class AppleProbe:
         "DeviceName",
         "ActivationState",
         "BasebandVersion",
+        "BasebandChipID",
         "CPUArchitecture",
+        "ChipID",
+        "BoardId",
+        "ApNonce",
+        "NonVolatileRAM",
+        "PasswordProtected",
     ]
 
     def __init__(self, runner: Runner) -> None:
@@ -66,7 +73,6 @@ class AppleProbe:
                     if evidence.return_code == 0 and evidence.stdout:
                         identifiers[key] = evidence.stdout.strip()
             else:
-                warning = "ideviceinfo was not found; identity detail is limited"
                 observations.append(
                     TransportObservation(
                         transport=TransportKind.APPLE_NORMAL,
@@ -75,7 +81,7 @@ class AppleProbe:
                         mode="normal",
                         identifiers=identifiers,
                         commands=commands,
-                        warnings=[warning],
+                        warnings=["ideviceinfo was not found; identity detail is limited"],
                     )
                 )
                 continue
@@ -90,6 +96,8 @@ class AppleProbe:
                     capabilities={
                         "paired_or_queryable": bool(identifiers.get("ProductType")),
                         "activation_state": identifiers.get("ActivationState", ""),
+                        "password_protected": identifiers.get("PasswordProtected", ""),
+                        "ap_nonce": identifiers.get("ApNonce", ""),
                     },
                     commands=commands,
                 )
@@ -131,7 +139,12 @@ class AppleProbe:
                 connected=True,
                 mode=mode_text,
                 identifiers=identifiers,
-                capabilities={"queryable": True},
+                capabilities={
+                    "queryable": True,
+                    "ap_nonce": identifiers.get("NONC", identifiers.get("APNONCE", "")),
+                    "sep_nonce": identifiers.get("SNON", ""),
+                    "iboot": identifiers.get("IBFL", identifiers.get("IBOOT", "")),
+                },
                 commands=[query],
             )
         ]
