@@ -1,0 +1,49 @@
+{
+  "connected": true,
+  "mode": "download",
+  "identifiers": {
+    "brand": "FIXTURE",
+    "model_code": "UNISOC-UMS9230",
+    "chipset": "ums9230",
+    "serial": "FIXTURE-SPD-DOWNLOAD",
+    "storage_type": "eMMC",
+    "storage_model": "EMMC-FIXTURE",
+    "storage_capacity_bytes": "64000000000"
+  },
+  "capabilities": {
+    "read_only": true,
+    "protocol_query_completed": true,
+    "partition_map_read": true,
+    "fdl_sent": false,
+    "storage": {
+      "type": "eMMC",
+      "model": "EMMC-FIXTURE",
+      "capacity_bytes": 64000000000,
+      "logical_block_size": 512
+    }
+  },
+  "partitions": [
+    {
+      "name": "productinfo",
+      "start_sector": 8192,
+      "sector_count": 8192,
+      "logical_block_size": 512,
+      "size_bytes": 4194304
+    },
+    {
+      "name": "boot",
+      "start_sector": 65536,
+      "sector_count": 131072,
+      "logical_block_size": 512,
+      "size_bytes": 67108864
+    },
+    {
+      "name": "super",
+      "start_sector": 524288,
+      "sector_count": 8388608,
+      "logical_block_size": 512,
+      "size_bytes": 4294967296
+    }
+  ],
+  "warnings": []
+}
