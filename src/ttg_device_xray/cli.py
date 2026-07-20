@@ -9,6 +9,7 @@ from .analyzers.ipsw import IpswAnalysisError, write_ipsw_report
 from .command import CommandRunner
 from .enhanced_pipeline import EnhancedXRayPipeline
 from .hunter_bridge import HunterBridge, HunterDelivery
+from .models import ProfileMatch
 from .pipeline import write_bundle
 from .profile_loader import ProfileLoader
 from .transports.adb import AdbProbe
@@ -144,7 +145,15 @@ def main(argv: list[str] | None = None) -> int:
     bundle = pipeline.scan(mission=args.mission)
 
     profile_loader = ProfileLoader(args.profile_dir)
-    bundle.profile_match = profile_loader.match_bundle(bundle)
+    if bundle.certification.verdict.value == "UNSAFE":
+        bundle.profile_match = ProfileMatch(
+            status="BLOCKED_UNSAFE",
+            requested_profile_id=bundle.certification.profile_id or "",
+            reasons=["Profile routing is blocked because certification is UNSAFE."],
+            write_allowed=False,
+        )
+    else:
+        bundle.profile_match = profile_loader.match_bundle(bundle)
     bundle.plan["profile_match"] = bundle.profile_match.to_dict()
     if bundle.profile_match.status == "MATCHED":
         bundle.plan["recommended_profile"] = bundle.profile_match.profile_id
