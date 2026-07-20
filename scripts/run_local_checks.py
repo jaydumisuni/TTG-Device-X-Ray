@@ -40,6 +40,7 @@ def main(argv: list[str] | None = None) -> int:
             if not artifacts:
                 raise RuntimeError("package build produced no artifacts")
             run([python, "-m", "twine", "check", *artifacts])
+            run([python, "scripts/validate_distribution.py", str(dist)])
 
     print("\nTTG Device X-Ray quality gate passed.")
     return 0
