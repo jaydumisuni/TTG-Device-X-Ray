@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "profile_id": "apple:a8-a11:gaster-reference",
+  "aliases": [
+    "apple:checkm8:gaster:a8-a11",
+    "apple:ramdisk:gaster:a8-a11"
+  ],
+  "stage": "CANDIDATE",
+  "approval": "candidate",
+  "vendor_family": "Apple",
+  "brands": [
+    "Apple"
+  ],
+  "match": {
+    "platforms": [
+      "apple"
+    ],
+    "brands": [
+      "Apple"
+    ],
+    "internal_models": [
+      "n61ap",
+      "n56ap",
+      "n71ap",
+      "n66ap",
+      "n66map",
+      "n69ap",
+      "n69uap",
+      "d10ap",
+      "d101ap",
+      "d11ap",
+      "d111ap",
+      "d20ap",
+      "d21ap",
+      "d22ap",
+      "d221ap"
+    ],
+    "board_patterns": [
+      "(?i)^(n61|n56|n71|n66m?|n69u?|d10|d101|d11|d111|d20|d21|d22|d221)ap$"
+    ]
+  },
+  "transport_priority": [
+    "apple_dfu",
+    "apple_recovery",
+    "apple_normal"
+  ],
+  "capabilities": {
+    "identity": true,
+    "firmware_match": true,
+    "apple_route_reference": {
+      "schema_version": "ttg.apple-route-reference.v1",
+      "classification": "documented_known_good_reference",
+      "generation": "a8_a11",
+      "pwn_provider": "gaster",
+      "pwn_source": {
+        "repository": "https://github.com/0x7ff/gaster",
+        "commit": "7fffffff38a1bed1cdc1c5bae0df70f14395129b",
+        "licence": "Apache-2.0"
+      },
+      "reference_catalogs": [
+        {
+          "url": "https://file.unlocktool.net",
+          "role": "working_ramdisk_and_diags_reference",
+          "artifacts_bundled": false
+        }
+      ],
+      "asset_policy": {
+        "local_only": true,
+        "sha256_required": true,
+        "device_exact": true,
+        "redistribution_allowed": false
+      },
+      "expected_transitions": [
+        "apple_dfu",
+        "pwned_dfu",
+        "patched_iboot_or_recovery",
+        "ramdisk_or_purple_diags"
+      ],
+      "xray_scope": "READ_ONLY_ROUTE_CERTIFICATION"
+    },
+    "ramdisk_reference_available": true,
+    "purple_diags_reference_available": true,
+    "repair_profile_ready": false
+  },
+  "adapter_contracts": {
+    "apple_route_reference": "tgcheckm8.apple-route-reference.v1"
+  },
+  "safety": {
+    "read_only": true,
+    "write_allowed": false,
+    "backup_required_before_external_write": true,
+    "profile_cannot_authorize_repairs": true,
+    "candidate_requires_owner_review": true
+  }
+}
