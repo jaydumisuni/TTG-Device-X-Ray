@@ -12,6 +12,7 @@ DEFAULT_PROFILE_ROOT = ROOT / "src" / "ttg_device_xray" / "profiles"
 
 PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]+$")
 CONTRACT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]+$")
+GIT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 ALLOWED_STAGES = {
     "OBSERVED",
     "CANDIDATE",
@@ -43,6 +44,19 @@ MATCH_LIST_FIELDS = {
     "storage_types",
     "required_partitions",
 }
+ALLOWED_APPLE_ROUTE_CLASSIFICATIONS = {
+    "documented_known_good_reference",
+    "working_package_reference",
+    "hardware_verified_reference",
+    "research_reference",
+}
+ALLOWED_APPLE_GENERATIONS = {"a5_a5x", "a6_a7", "a8_a11", "a12_a13"}
+ALLOWED_APPLE_PWN_PROVIDERS = {
+    "arduino_max3421e",
+    "ipwndfu",
+    "gaster",
+    "usbliter8_rp2350",
+}
 
 
 def _error(errors: list[str], path: Path, message: str) -> None:
@@ -54,6 +68,97 @@ def _require_dict(value: Any, errors: list[str], path: Path, field: str) -> dict
         _error(errors, path, f"{field} must be an object")
         return {}
     return value
+
+
+def _validate_apple_route_reference(
+    path: Path,
+    profile: dict[str, Any],
+    errors: list[str],
+) -> None:
+    capabilities = profile.get("capabilities", {})
+    if not isinstance(capabilities, dict):
+        return
+    value = capabilities.get("apple_route_reference")
+    if value is None:
+        return
+    route = _require_dict(value, errors, path, "capabilities.apple_route_reference")
+
+    if route.get("schema_version") != "ttg.apple-route-reference.v1":
+        _error(errors, path, "Apple route reference schema must be ttg.apple-route-reference.v1")
+
+    classification = str(route.get("classification", "")).strip()
+    if classification not in ALLOWED_APPLE_ROUTE_CLASSIFICATIONS:
+        _error(errors, path, "Apple route reference classification is unsupported")
+
+    generation = str(route.get("generation", "")).strip()
+    if generation not in ALLOWED_APPLE_GENERATIONS:
+        _error(errors, path, "Apple route reference generation is unsupported")
+
+    provider = str(route.get("pwn_provider", "")).strip()
+    if provider not in ALLOWED_APPLE_PWN_PROVIDERS:
+        _error(errors, path, "Apple route reference pwn provider is unsupported")
+
+    source = _require_dict(route.get("pwn_source"), errors, path, "pwn_source")
+    repository = str(source.get("repository", "")).strip()
+    commit = str(source.get("commit", "")).strip()
+    licence = str(source.get("licence", "")).strip()
+    if not repository.startswith("https://github.com/"):
+        _error(errors, path, "pwn_source.repository must be an HTTPS GitHub URL")
+    if not GIT_COMMIT_RE.fullmatch(commit):
+        _error(errors, path, "pwn_source.commit must be a full 40-character commit")
+    if not licence:
+        _error(errors, path, "pwn_source.licence is required")
+
+    catalogs = route.get("reference_catalogs")
+    if not isinstance(catalogs, list) or not catalogs:
+        _error(errors, path, "reference_catalogs must contain at least one source")
+    else:
+        for index, catalog in enumerate(catalogs):
+            if not isinstance(catalog, dict):
+                _error(errors, path, f"reference_catalogs[{index}] must be an object")
+                continue
+            url = str(catalog.get("url", "")).strip()
+            role = str(catalog.get("role", "")).strip()
+            if not url.startswith("https://"):
+                _error(errors, path, f"reference_catalogs[{index}].url must use HTTPS")
+            if not role:
+                _error(errors, path, f"reference_catalogs[{index}].role is required")
+            if catalog.get("artifacts_bundled") is not False:
+                _error(errors, path, "public X-Ray profiles cannot bundle reference artifacts")
+
+    asset_policy = _require_dict(route.get("asset_policy"), errors, path, "asset_policy")
+    required_asset_policy = {
+        "local_only": True,
+        "sha256_required": True,
+        "device_exact": True,
+        "redistribution_allowed": False,
+    }
+    for field, expected in required_asset_policy.items():
+        if asset_policy.get(field) is not expected:
+            _error(errors, path, f"asset_policy.{field} must be {expected!r}")
+
+    transitions = route.get("expected_transitions")
+    if not isinstance(transitions, list) or not all(
+        isinstance(item, str) and item.strip() for item in transitions
+    ):
+        _error(errors, path, "expected_transitions must be a non-empty list of strings")
+    else:
+        required = {"apple_dfu", "pwned_dfu"}
+        if not required.issubset(set(transitions)):
+            _error(errors, path, "expected_transitions must include apple_dfu and pwned_dfu")
+
+    if route.get("xray_scope") != "READ_ONLY_ROUTE_CERTIFICATION":
+        _error(errors, path, "xray_scope must remain READ_ONLY_ROUTE_CERTIFICATION")
+
+    if classification == "documented_known_good_reference":
+        if generation == "a8_a11" and provider != "gaster":
+            _error(errors, path, "documented A8-A11 route references must use Gaster")
+
+    contracts = profile.get("adapter_contracts", {})
+    if not isinstance(contracts, dict) or contracts.get("apple_route_reference") != (
+        "tgcheckm8.apple-route-reference.v1"
+    ):
+        _error(errors, path, "Apple route reference profile must declare the TGCHECKM8 contract")
 
 
 def _validate_profile(
@@ -135,6 +240,7 @@ def _validate_profile(
         if safety.get(field) is not expected:
             _error(errors, path, f"safety.{field} must be {expected!r}")
 
+    _validate_apple_route_reference(path, profile, errors)
     return profile_id, aliases
 
 
