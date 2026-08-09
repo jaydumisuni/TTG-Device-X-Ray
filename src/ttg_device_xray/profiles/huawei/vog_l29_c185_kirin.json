@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "profile_id": "android:huawei:vog-l29:kirin980:c185",
+  "aliases": [
+    "android:huawei:vog-l29:c185",
+    "huawei:vog-l29:c185"
+  ],
+  "stage": "REPEATED_MATCH",
+  "approval": "approved",
+  "vendor_family": "Huawei",
+  "brands": [
+    "Huawei"
+  ],
+  "match": {
+    "platforms": [
+      "android"
+    ],
+    "brands": [
+      "Huawei"
+    ],
+    "internal_models": [
+      "VOG-L29",
+      "VOG-L29D"
+    ],
+    "product_types": [
+      "VOG-L29",
+      "VOG-L29D"
+    ],
+    "chipsets": [
+      "Kirin 980",
+      "Kirin980"
+    ],
+    "board_patterns": [
+      "(?i)^VOG(?:UE)?(?:[-_].*)?$"
+    ]
+  },
+  "transport_priority": [
+    "adb",
+    "fastboot"
+  ],
+  "capabilities": {
+    "identity": true,
+    "firmware_match": true,
+    "partition_map": true,
+    "repair_profile_ready": false,
+    "kirin_capability_reference": {
+      "schema": "ttg.kirin-capability-reference.v1",
+      "pack_id": "kirin-vog-l29-c185-replay",
+      "pack_version": "1.0.0",
+      "packaged_path": "capability_packs/kirin/vog_replay_v1.json",
+      "source_repository": "jaydumisuni/TECHGUYTOOL-Huawei",
+      "source_commit": "93a8bd705bd9e8d8bade40f0e15181644211812e",
+      "source_manifest_path": "packs/kirin/manifest.json",
+      "source_manifest_sha256": "3859e0e71495a4847c8698714494b5ce94264d12d6d8eaa663d4d56c45b8fc9f",
+      "maturity": "replay_supported",
+      "includes_execution": false,
+      "xray_scope": "READ_ONLY_DIAGNOSTIC_PROMOTION"
+    }
+  },
+  "adapter_contracts": {},
+  "safety": {
+    "read_only": true,
+    "write_allowed": false,
+    "backup_required_before_external_write": true,
+    "profile_cannot_authorize_repairs": true,
+    "candidate_requires_owner_review": false
+  }
+}

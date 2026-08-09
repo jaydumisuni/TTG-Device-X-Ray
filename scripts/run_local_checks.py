@@ -28,6 +28,7 @@ def main(argv: list[str] | None = None) -> int:
     run([python, "scripts/validate_fixtures.py"])
     run([python, "scripts/check_read_only.py"])
     run([python, "scripts/check_public_privacy.py"])
+    run([python, "scripts/validate_kirin_promotion.py"])
     run([python, "-m", "ruff", "check", "."])
 
     if not args.skip_tests:
