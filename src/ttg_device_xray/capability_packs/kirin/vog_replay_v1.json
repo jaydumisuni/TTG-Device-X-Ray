@@ -1,0 +1,47 @@
+{
+  "schema": "ttg-device-xray.promoted-kirin-capability.v1",
+  "pack_id": "kirin-vog-l29-c185-replay",
+  "pack_version": "1.0.0",
+  "specialist": "kirin_xray",
+  "source": {
+    "repository": "jaydumisuni/TECHGUYTOOL-Huawei",
+    "commit": "93a8bd705bd9e8d8bade40f0e15181644211812e",
+    "manifest_path": "packs/kirin/manifest.json",
+    "manifest_sha256": "3859e0e71495a4847c8698714494b5ce94264d12d6d8eaa663d4d56c45b8fc9f",
+    "source_maturity": "replay_supported"
+  },
+  "includes_execution": false,
+  "write_allowed": false,
+  "rules": [
+    {
+      "id": "vog.main_version_state.oeminfo",
+      "evidence_level": "replay_supported",
+      "statement": "For the frozen VOG replay evidence, MAIN VERSION state is explained by OEMINFO version identity rather than a proven standalone writable verlist partition."
+    },
+    {
+      "id": "vog.service_mode.preserve_until_verified",
+      "evidence_level": "replay_supported",
+      "statement": "Preserve Board-Service Fastboot while main-version/identity restoration and remaining firmware stages are unresolved."
+    },
+    {
+      "id": "vog.stock_fastboot.finalization_only",
+      "evidence_level": "replay_supported",
+      "statement": "Stock Fastboot restoration is finalization-only after release conditions are verified."
+    },
+    {
+      "id": "vog.branding.separate_stage",
+      "evidence_level": "replay_supported",
+      "statement": "Branding normalization is distinct from core recovery and must modify only reviewed fields proven incorrect."
+    },
+    {
+      "id": "super.chunking.derive_from_artifact",
+      "evidence_level": "replay_supported",
+      "statement": "Sparse SUPER continuation derives its chunk set from the validated artifact; no universal chunk count is assumed."
+    }
+  ],
+  "limitations": [
+    "Replay support does not imply physical VOG hardware certification.",
+    "This promoted pack contains no loader transfer, partition write, OEMINFO construction, firmware flashing, reboot, unlock or relock authority.",
+    "Device-changing repair recipes remain outside TTG Device X-Ray."
+  ]
+}
