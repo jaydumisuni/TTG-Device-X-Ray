@@ -31,7 +31,8 @@
     ],
     "build_patterns": [
       "(?i)AQ3A\\.240912\\.001",
-      "(?i)OS2\\.0\\..*VMWCNXM"
+      "(?i)OS2\\.0\\..*VMWCNXM",
+      "(?i)OS2\\.0\\..*VMWMIXM"
     ],
     "storage_types": [
       "UFS"
@@ -54,6 +55,8 @@
     "identity": true,
     "partition_map": true,
     "firmware_match": true,
+    "regional_customization_evidence": true,
+    "regional_firmware_comparison": "read_only",
     "flash_planning": false,
     "unbrick_planning": false,
     "repair_profile_ready": false

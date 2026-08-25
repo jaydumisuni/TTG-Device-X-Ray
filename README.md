@@ -27,6 +27,15 @@ Every emergency/download probe supports an optional read-only JSON helper and of
 fixture. No probe uploads a programmer, sends an FDL, writes PIT, flashes, formats, resets, or writes
 a device partition.
 
+### Android regional/customization evidence
+
+ADB scans also emit a separate read-only regional observation. It records allow-listed regional
+properties, user-uninstalled system packages, Google-stack presence, runtime overlays and
+region-relevant customization filenames without changing the device. This makes CN/Global/EEA and
+other regional firmware comparisons explicit while preserving X-Ray's read-only boundary.
+
+See [`docs/android-regional-evidence.md`](docs/android-regional-evidence.md).
+
 ## Pipeline
 
 ```text
