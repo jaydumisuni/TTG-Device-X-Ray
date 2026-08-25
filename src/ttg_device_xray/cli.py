@@ -14,6 +14,7 @@ from .models import ScanBundle, TransportObservation
 from .pipeline import write_bundle
 from .platform_tools import PlatformToolsRunner
 from .profile_loader import ProfileLoader
+from .regional_compare import RegionalCompareError, compare_regional_sources
 from .repair_readiness import build_repair_readiness
 from .transports.adb import AdbProbe
 from .transports.android_regional_manifest import AndroidRegionalManifestProbe
@@ -39,6 +40,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Additional profile directory; may be supplied more than once",
     )
+
+    compare = subparsers.add_parser(
+        "compare-regional",
+        help="Compare two read-only Android firmware-regional manifests",
+    )
+    compare.add_argument(
+        "left",
+        type=Path,
+        help="Left X-Ray bundle directory, transport_evidence.json, or manifest JSON",
+    )
+    compare.add_argument(
+        "right",
+        type=Path,
+        help="Right X-Ray bundle directory, transport_evidence.json, or manifest JSON",
+    )
+    compare.add_argument("--output", type=Path, help="Optional JSON report path")
 
     ipsw = subparsers.add_parser(
         "inspect-ipsw", help="Inspect an Apple IPSW BuildManifest without restoring"
@@ -107,6 +124,21 @@ def _diagnostic_candidates(bundle: ScanBundle) -> list[dict[str, Any]]:
     return summaries
 
 
+def _run_regional_compare(args: argparse.Namespace) -> int:
+    try:
+        report = compare_regional_sources(args.left, args.right)
+    except RegionalCompareError as exc:
+        print(json.dumps({"error": str(exc)}, indent=2))
+        return 2
+
+    body = json.dumps(report, indent=2) + "\n"
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(body, encoding="utf-8")
+    print(body, end="")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     runner = CommandRunner()
@@ -170,6 +202,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
+
+    if args.command == "compare-regional":
+        return _run_regional_compare(args)
 
     if args.command == "inspect-ipsw":
         try:
