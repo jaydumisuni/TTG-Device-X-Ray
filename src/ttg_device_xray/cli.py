@@ -16,6 +16,7 @@ from .platform_tools import PlatformToolsRunner
 from .profile_loader import ProfileLoader
 from .repair_readiness import build_repair_readiness
 from .transports.adb import AdbProbe
+from .transports.android_regional import AndroidRegionalProbe
 from .transports.apple import AppleProbe
 from .transports.fastboot import FastbootProbe
 from .transports.mtk_meta import MtkMetaProbe
@@ -66,6 +67,8 @@ def _diagnostic_observation(observation: TransportObservation) -> dict[str, Any]
         "mode": observation.mode,
         "available": observation.available,
         "connected": observation.connected,
+        "evidence_scope": str(capabilities.get("evidence_scope", "")),
+        "region": str(identifiers.get("region", "")),
         "usb_vid": str(identifiers.get("usb_vid", "")),
         "usb_pid": str(identifiers.get("usb_pid", "")),
         "pnp_present": capabilities.get("pnp_present"),
@@ -180,6 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     pipeline = EnhancedXRayPipeline(
         probes=[
             AdbProbe(platform_tools),
+            AndroidRegionalProbe(platform_tools),
             FastbootProbe(platform_tools),
             MtkMetaProbe(runner),
             QualcommEdlProbe(runner),
