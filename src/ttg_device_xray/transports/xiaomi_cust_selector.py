@@ -24,7 +24,7 @@ emit_file apps_config /cust/etc/cust_apps_config'''
 
 _BEGIN_RE = re.compile(r"^TTG_XIAOMI_CUST_BEGIN\|([^|]+)\|(.*)$")
 _END_RE = re.compile(r"^TTG_XIAOMI_CUST_END\|([^|]+)$")
-_REQUEST_PAIR_RE = re.compile(r"([A-Za-z][A-Za-z0-9_]*)\s*=\s*([^\s]*)")
+_REQUEST_KEY_RE = re.compile(r"(?<!\S)([A-Za-z][A-Za-z0-9_]*)\s*=")
 
 
 def parse_xiaomi_cust_selector(text: str) -> dict[str, Any]:
@@ -36,7 +36,11 @@ def parse_xiaomi_cust_selector(text: str) -> dict[str, Any]:
     """
 
     sections = _sections(text)
-    present = {name for name, value in sections.items() if value.strip() and value.strip() != "TTG_XIAOMI_CUST_MISSING"}
+    present = {
+        name
+        for name, value in sections.items()
+        if value.strip() and value.strip() != "TTG_XIAOMI_CUST_MISSING"
+    }
     if not present:
         return {
             "status": "NOT_PRESENT",
@@ -60,20 +64,32 @@ def parse_xiaomi_cust_selector(text: str) -> dict[str, Any]:
     }
 
 
-def selector_consistency(selector: dict[str, Any], regional_properties: dict[str, Any]) -> dict[str, Any]:
+def selector_consistency(
+    selector: dict[str, Any], regional_properties: dict[str, Any]
+) -> dict[str, Any]:
     """Compare file-backed Xiaomi selector state with live regional properties."""
 
     file_variant = str(selector.get("cust_variant", "")).strip()
-    request = selector.get("request") if isinstance(selector.get("request"), dict) else {}
-    property_variant = str(regional_properties.get("ro.miui.cust_variant", "")).strip()
+    request = (
+        selector.get("request") if isinstance(selector.get("request"), dict) else {}
+    )
+    property_variant = str(
+        regional_properties.get("ro.miui.cust_variant", "")
+    ).strip()
     property_region = str(regional_properties.get("ro.miui.region", "")).strip()
     request_sku = str(request.get("currentSku", "")).strip()
     request_region = str(request.get("romRegion", "")).strip()
 
     checks = {
-        "cust_variant_matches_property": _same_when_present(file_variant, property_variant),
-        "cust_variant_matches_request_sku": _same_when_present(file_variant, request_sku),
-        "region_matches_request": _same_when_present(property_region.lower(), request_region.lower()),
+        "cust_variant_matches_property": _same_when_present(
+            file_variant, property_variant
+        ),
+        "cust_variant_matches_request_sku": _same_when_present(
+            file_variant, request_sku
+        ),
+        "region_matches_request": _same_when_present(
+            property_region.lower(), request_region.lower()
+        ),
     }
     available = [value for value in checks.values() if value is not None]
     return {
@@ -83,7 +99,11 @@ def selector_consistency(selector: dict[str, Any], regional_properties: dict[str
 
 
 def compact_xiaomi_cust_selector(selector: dict[str, Any]) -> str:
-    preload = selector.get("preload_policy") if isinstance(selector.get("preload_policy"), dict) else {}
+    preload = (
+        selector.get("preload_policy")
+        if isinstance(selector.get("preload_policy"), dict)
+        else {}
+    )
     packages = preload.get("packages") if isinstance(preload.get("packages"), list) else []
     return (
         f"xiaomi_cust_status={selector.get('status', 'ERROR')} "
@@ -130,7 +150,22 @@ def _business_version(text: str) -> str:
 
 
 def _request_config(text: str) -> dict[str, str]:
-    pairs = dict(_REQUEST_PAIR_RE.findall(" ".join(text.splitlines())))
+    """Parse Xiaomi's whitespace-delimited key/value request descriptor.
+
+    Values may intentionally be empty (for example ``testConfigId=``), so
+    splitting on non-whitespace values is unsafe: it can consume the following
+    ``currentSku=...`` token as the previous value. Recover key boundaries first,
+    then slice each value up to the next key marker.
+    """
+
+    flattened = " ".join(text.splitlines())
+    matches = list(_REQUEST_KEY_RE.finditer(flattened))
+    pairs: dict[str, str] = {}
+    for index, match in enumerate(matches):
+        value_start = match.end()
+        value_end = matches[index + 1].start() if index + 1 < len(matches) else len(flattened)
+        pairs[match.group(1)] = flattened[value_start:value_end].strip()
+
     keep = (
         "device",
         "romRegion",
