@@ -119,7 +119,7 @@ class AndroidRegionalProbe:
                     transport=TransportKind.ADB,
                     available=False,
                     connected=False,
-                    mode="regional-unavailable",
+                    mode="unavailable",
                     capabilities={
                         "evidence_scope": "regional_customization",
                         "read_only": True,
@@ -143,7 +143,7 @@ class AndroidRegionalProbe:
                 transport=TransportKind.ADB,
                 available=True,
                 connected=state == "device",
-                mode=f"regional-{state}",
+                mode=state,
                 identifiers={"serial": serial},
                 capabilities={
                     "evidence_scope": "regional_customization",
@@ -253,7 +253,7 @@ class AndroidRegionalProbe:
                     transport=TransportKind.ADB,
                     available=True,
                     connected=False,
-                    mode="regional-no-device",
+                    mode="no-device",
                     capabilities={
                         "evidence_scope": "regional_customization",
                         "read_only": True,
