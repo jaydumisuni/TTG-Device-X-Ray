@@ -1,3 +1,4 @@
+from ttg_device_xray.models import CommandEvidence
 from ttg_device_xray.transports.android_regional_manifest import (
     AndroidRegionalManifestProbe,
 )
@@ -46,6 +47,41 @@ def test_file_manifest_keeps_cust_and_hashes_relevant_configs() -> None:
     assert "/product/etc/sysconfig/whitelist.xml" in by_path
     assert "/product/etc/permissions/google-hiddenapi-package-whitelist.xml" in by_path
     assert "/vendor/etc/audio_policy_configuration.xml" not in by_path
+
+
+def test_file_manifest_uses_single_adb_remote_shell_command() -> None:
+    args = AndroidRegionalManifestProbe._file_manifest_adb_args()
+
+    assert len(args) == 2
+    assert args[0] == "shell"
+    assert args[1].startswith("for root in /cust ")
+    assert "sh -c" not in args[1]
+    assert "find \"$root\" -maxdepth" in args[1]
+
+
+def test_file_manifest_collection_distinguishes_error_from_empty_success() -> None:
+    success = CommandEvidence(command=["adb", "shell"], return_code=0)
+    failure = CommandEvidence(
+        command=["adb", "shell"],
+        return_code=1,
+        stderr="syntax error",
+    )
+
+    collected = AndroidRegionalManifestProbe._file_manifest_collection(success, [])
+    failed = AndroidRegionalManifestProbe._file_manifest_collection(failure, [])
+
+    assert collected == {
+        "status": "COLLECTED",
+        "return_code": 0,
+        "timed_out": False,
+        "file_count": 0,
+    }
+    assert failed == {
+        "status": "ERROR",
+        "return_code": 1,
+        "timed_out": False,
+        "file_count": 0,
+    }
 
 
 def test_google_integration_classifies_absent_partial_and_system() -> None:
