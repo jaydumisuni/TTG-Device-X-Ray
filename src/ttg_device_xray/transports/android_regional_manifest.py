@@ -27,14 +27,11 @@ class AndroidRegionalManifestProbe(AndroidRegionalProbe):
         "com.android.vending",
     )
 
-    FILE_MANIFEST_SCRIPT = r'''for root in \
-/cust \
-/product/etc/sysconfig \
-/product/etc/permissions \
-/system_ext/etc/sysconfig \
-/system_ext/etc/permissions \
-/vendor/etc \
-/odm/etc; do
+    # adb shell reconstructs its remote command line. Passing ``sh -c`` and the
+    # script as separate argv is not portable because the script can stop being
+    # the single -c operand on Android platform-tools/Toybox combinations. Send
+    # this complete command directly as the one remote shell command instead.
+    FILE_MANIFEST_SCRIPT = r'''for root in /cust /product/etc/sysconfig /product/etc/permissions /system_ext/etc/sysconfig /system_ext/etc/permissions /vendor/etc /odm/etc; do
 [ -d "$root" ] || continue
 case "$root" in
   /cust) depth=5 ;;
@@ -54,6 +51,12 @@ elif command -v toybox >/dev/null 2>&1; then
 fi
 printf '%s|%s|%s\n' "$file" "$size" "$hash"
 done'''
+
+    @classmethod
+    def _file_manifest_adb_args(cls) -> tuple[str, str]:
+        """Return the portable ADB remote-shell invocation for the manifest probe."""
+
+        return ("shell", cls.FILE_MANIFEST_SCRIPT)
 
     def probe(self):
         observations = super().probe()
@@ -99,18 +102,32 @@ done'''
 
             file_evidence = self._adb(
                 serial,
-                "shell",
-                "sh",
-                "-c",
-                self.FILE_MANIFEST_SCRIPT,
+                *self._file_manifest_adb_args(),
                 timeout=90,
             )
-            file_manifest = self._parse_file_manifest(file_evidence.stdout)
-            file_evidence.stdout = self._compact_file_manifest_evidence(file_manifest)
+            file_manifest = (
+                self._parse_file_manifest(file_evidence.stdout)
+                if file_evidence.return_code == 0 and not file_evidence.timed_out
+                else []
+            )
+            file_collection = self._file_manifest_collection(file_evidence, file_manifest)
+            if file_collection["status"] != "COLLECTED":
+                observation.warnings.append(
+                    "regional customization file manifest unavailable because the ADB shell "
+                    "collection command failed"
+                )
+            file_evidence.stdout = self._compact_file_manifest_evidence(
+                file_manifest,
+                file_collection,
+            )
             observation.commands.append(file_evidence)
 
             google_integration = self._classify_google_integration(google_stack)
-            firmware_manifest = self._firmware_manifest(observation, file_manifest)
+            firmware_manifest = self._firmware_manifest(
+                observation,
+                file_manifest,
+                file_collection,
+            )
             user_manifest = self._user_manifest(
                 observation,
                 package_states,
@@ -122,6 +139,7 @@ done'''
                     "regional_manifest_schema": self.MANIFEST_SCHEMA,
                     "customization_file_manifest": file_manifest,
                     "customization_file_count": len(file_manifest),
+                    "customization_file_collection": file_collection,
                     "google_integration": google_integration,
                     "firmware_regional_manifest": firmware_manifest,
                     "firmware_regional_manifest_sha256": self._canonical_sha256(
@@ -256,9 +274,25 @@ done'''
         )
 
     @staticmethod
-    def _compact_file_manifest_evidence(records: list[dict[str, Any]]) -> str:
+    def _file_manifest_collection(evidence, records: list[dict[str, Any]]) -> dict[str, Any]:
+        collected = evidence.return_code == 0 and not evidence.timed_out
+        return {
+            "status": "COLLECTED" if collected else "ERROR",
+            "return_code": evidence.return_code,
+            "timed_out": evidence.timed_out,
+            "file_count": len(records),
+        }
+
+    @staticmethod
+    def _compact_file_manifest_evidence(
+        records: list[dict[str, Any]],
+        collection: dict[str, Any],
+    ) -> str:
         hashed = sum(1 for item in records if item.get("sha256"))
-        return f"regional_config_files={len(records)} sha256_available={hashed}"
+        return (
+            f"regional_config_status={collection.get('status', 'ERROR')} "
+            f"regional_config_files={len(records)} sha256_available={hashed}"
+        )
 
     @classmethod
     def _classify_google_integration(
@@ -314,6 +348,7 @@ done'''
         cls,
         observation,
         file_manifest: list[dict[str, Any]],
+        file_collection: dict[str, Any],
     ) -> dict[str, Any]:
         capabilities = observation.capabilities
         regional_packages = capabilities.get("regional_packages", [])
@@ -356,6 +391,7 @@ done'''
             ),
             "google_stack": google_firmware,
             "regional_overlays": capabilities.get("regional_overlays", []),
+            "customization_file_collection": file_collection,
             "customization_files": file_manifest,
         }
 
