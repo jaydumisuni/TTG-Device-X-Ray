@@ -27,8 +27,8 @@ The probe is read-only and records:
 - explicit presence/absence state for the core Google stack;
 - whether the core Google stack is system-integrated, partial, absent or data/mixed;
 - runtime overlay state from `cmd overlay list`;
-- bounded recursive fingerprints for region-relevant configuration files under `/cust`, product,
-  system-ext, vendor and ODM configuration roots;
+- bounded recursive fingerprints for region-relevant configuration files under `/cust`, common
+  `/system` sysconfig/permissions, product, system-ext, vendor and ODM configuration roots;
 - canonical firmware-regional and current-user manifests with SHA-256 digests.
 
 The package manifest intentionally distinguishes:
@@ -62,6 +62,12 @@ All files under `/cust` are treated as regional evidence. Outside `/cust`, the p
 paths associated with Google/GMS, MIUI/Xiaomi, overlays, preload, region, sysconfig or other
 customization markers. This gives a deterministic comparison surface without collecting unrelated
 system files.
+
+The common `/system/etc/sysconfig` and `/system/etc/permissions` roots are included deliberately.
+Google or regional framework hooks may live in the shared system base even when Google applications
+are absent from the current regional package set. Recording those files separately from product,
+system-ext and `/cust` prevents package absence from being mistaken for proof that the common base
+contains no Google integration hooks.
 
 ## Google integration classification
 
