@@ -136,11 +136,18 @@ def _xiaomi_selector_parts(
     """Split Xiaomi selector metadata from its package policy for useful diffs."""
 
     raw_selector = manifest.get("xiaomi_customization_selector")
-    selector = dict(raw_selector) if isinstance(raw_selector, dict) else {}
+    if not isinstance(raw_selector, dict):
+        return {}, []
+
+    selector = dict(raw_selector)
     raw_policy = selector.get("preload_policy")
     policy = dict(raw_policy) if isinstance(raw_policy, dict) else {}
     raw_packages = policy.pop("packages", [])
-    packages = [dict(item) for item in raw_packages if isinstance(item, dict)] if isinstance(raw_packages, list) else []
+    packages = (
+        [dict(item) for item in raw_packages if isinstance(item, dict)]
+        if isinstance(raw_packages, list)
+        else []
+    )
     selector["preload_policy"] = policy
     return selector, packages
 
