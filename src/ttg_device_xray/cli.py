@@ -16,7 +16,7 @@ from .platform_tools import PlatformToolsRunner
 from .profile_loader import ProfileLoader
 from .repair_readiness import build_repair_readiness
 from .transports.adb import AdbProbe
-from .transports.android_regional import AndroidRegionalProbe
+from .transports.android_regional_manifest import AndroidRegionalManifestProbe
 from .transports.apple import AppleProbe
 from .transports.fastboot import FastbootProbe
 from .transports.mtk_meta import MtkMetaProbe
@@ -183,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     pipeline = EnhancedXRayPipeline(
         probes=[
             AdbProbe(platform_tools),
-            AndroidRegionalProbe(platform_tools),
+            AndroidRegionalManifestProbe(platform_tools),
             FastbootProbe(platform_tools),
             MtkMetaProbe(runner),
             QualcommEdlProbe(runner),
