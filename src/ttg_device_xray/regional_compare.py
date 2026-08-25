@@ -187,8 +187,8 @@ def compare_regional_manifests(
                 "changed": len(properties["changed"]),
                 "unchanged": properties["unchanged_count"],
             },
-            "packages": _summary(packages),
-            "overlays": _summary(overlays),
+            "regional_packages": _summary(packages),
+            "regional_overlays": _summary(overlays),
             "customization_files": _summary(files),
             "google_stack": {
                 "added": len(google["added"]),
