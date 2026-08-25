@@ -34,6 +34,21 @@ properties, user-uninstalled system packages, Google-stack presence, runtime ove
 region-relevant customization filenames without changing the device. This makes CN/Global/EEA and
 other regional firmware comparisons explicit while preserving X-Ray's read-only boundary.
 
+Deep regional manifests fingerprint bounded customization files under `/cust`, product, system-ext,
+vendor and ODM roots. A failed file-collection command is recorded as an explicit collection error;
+it is never represented as a valid empty manifest.
+
+Two completed regional manifests can be compared entirely offline:
+
+```powershell
+ttg-xray compare-regional .\scans\cn-bundle .\scans\global-bundle --output .\reports\cn-vs-global.json
+```
+
+The comparison reports added, removed and changed regional properties, packages, overlays,
+customization files and Google-stack records while retaining each source manifest's SHA-256 and
+collection status. Inputs may be X-Ray bundle directories, `transport_evidence.json` files, or direct
+`firmware_regional_evidence` JSON files.
+
 See [`docs/android-regional-evidence.md`](docs/android-regional-evidence.md).
 
 ## Pipeline
@@ -107,6 +122,7 @@ python scripts/check_read_only.py
 ```powershell
 ttg-xray doctor
 ttg-xray scan --output scans
+ttg-xray compare-regional .\scans\cn-bundle .\scans\global-bundle --output .\reports\regional-diff.json
 ttg-xray inspect-ipsw .\firmware\device.ipsw --output .\reports\device-ipsw.json
 ```
 
