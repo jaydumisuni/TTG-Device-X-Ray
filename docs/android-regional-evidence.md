@@ -63,6 +63,21 @@ paths associated with Google/GMS, MIUI/Xiaomi, overlays, preload, region, syscon
 customization markers. This gives a deterministic comparison surface without collecting unrelated
 system files.
 
+Deep collection also records an explicit status:
+
+```json
+{
+  "status": "COLLECTED",
+  "return_code": 0,
+  "timed_out": false,
+  "file_count": 124
+}
+```
+
+A failed or timed-out ADB shell collection is `ERROR`, not a valid zero-file manifest. The status is
+included in the canonical firmware-regional manifest so incomplete collection cannot hash as if it
+were an intentionally empty regional layer.
+
 ## Google integration classification
 
 The core comparison set is:
@@ -96,6 +111,33 @@ RUXM -> RUSSIA
 This is evidence classification, not write authority. A suffix match never authorizes conversion,
 firmware installation, property mutation or bootloader changes.
 
+## Offline regional comparison
+
+Once two firmware-regional manifests exist, compare them without reconnecting either device:
+
+```powershell
+ttg-xray compare-regional .\scans\cn-bundle .\scans\global-bundle --output .\reports\cn-vs-global.json
+```
+
+Each input may be:
+
+- an X-Ray scan bundle directory containing `transport_evidence.json`;
+- a `transport_evidence.json` file;
+- a direct JSON object whose `kind` is `firmware_regional_evidence`.
+
+The deterministic comparison schema is `ttg.xray.android-regional-compare.v1`. It reports:
+
+- whether the inferred region changed;
+- each source manifest SHA-256 and customization-file collection status;
+- added, removed, changed and unchanged regional properties;
+- added, removed, changed and unchanged regional packages;
+- added, removed, changed and unchanged regional overlays;
+- added, removed, changed and unchanged customization files by path/hash;
+- added, removed, changed and unchanged Google-stack records.
+
+The command is entirely offline and read-only. It does not invoke ADB, Fastboot or any repair
+adapter.
+
 ## Output location
 
 Regional evidence remains inside the normal transport observations in `transport_evidence.json` and
@@ -120,6 +162,7 @@ Useful fields include:
 - `capabilities.google_stack`
 - `capabilities.google_integration`
 - `capabilities.regional_overlays`
+- `capabilities.customization_file_collection`
 - `capabilities.customization_file_manifest`
 - `capabilities.firmware_regional_manifest`
 - `capabilities.firmware_regional_manifest_sha256`
@@ -131,7 +174,7 @@ user state changes after a debloat, suspension or reinstall.
 
 ## Safety boundary
 
-The regional probe does not:
+The regional probe and comparator do not:
 
 - write properties;
 - change locale/region settings;
