@@ -13,7 +13,8 @@ and service packages. Treating those differences as a full-device identity probl
 comparison harder than necessary.
 
 The regional observation records evidence that can later be compared against an offline firmware
-manifest or another known-good regional device.
+manifest or another known-good regional device. A ROM download is not required to build the live
+phone side of the comparison.
 
 ## Evidence collected
 
@@ -22,11 +23,13 @@ The probe is read-only and records:
 - allow-listed build, locale, Xiaomi/MIUI region and Google integration properties;
 - the current Android user ID;
 - package-manager knowledge including packages removed only for the current user (`pm -u`);
-- system/user and disabled state for region-relevant packages;
+- system/user, disabled, hidden and suspended state for region-relevant packages;
 - explicit presence/absence state for the core Google stack;
+- whether the core Google stack is system-integrated, partial, absent or data/mixed;
 - runtime overlay state from `cmd overlay list`;
-- region-relevant filenames from fixed customization roots such as `/cust`, product/system-ext
-  `sysconfig` and `permissions`, vendor and ODM configuration directories.
+- bounded recursive fingerprints for region-relevant configuration files under `/cust`, product,
+  system-ext, vendor and ODM configuration roots;
+- canonical firmware-regional and current-user manifests with SHA-256 digests.
 
 The package manifest intentionally distinguishes:
 
@@ -35,11 +38,44 @@ known_to_package_manager
 installed_for_current_user
 known_system_package
 disabled_for_current_user
+suspended_for_current_user
+hidden_for_current_user
 partition
 ```
 
-That distinction is important after a technician has removed a preloaded system package only for
-user 0: the package may disappear from the launcher while still existing in the signed firmware.
+That distinction is important after a technician has removed or suspended a preloaded system package
+for user 0: the package may disappear from the launcher while still existing in the signed firmware.
+
+## Configuration fingerprints
+
+X-Ray does not need to copy regional configuration contents to compare builds. The v2 probe records
+bounded file metadata instead:
+
+```text
+path
+partition
+size_bytes
+sha256
+```
+
+All files under `/cust` are treated as regional evidence. Outside `/cust`, the probe retains only
+paths associated with Google/GMS, MIUI/Xiaomi, overlays, preload, region, sysconfig or other
+customization markers. This gives a deterministic comparison surface without collecting unrelated
+system files.
+
+## Google integration classification
+
+The core comparison set is:
+
+```text
+com.google.android.gms
+com.google.android.gsf
+com.android.vending
+```
+
+The probe reports `ABSENT`, `PARTIAL` or `PRESENT`, then separately reports whether those packages are
+known system components or appear to be data/mixed installations. This is evidence only; it does not
+claim Play Protect certification or authorize package installation.
 
 ## Xiaomi region inference
 
@@ -58,7 +94,7 @@ RUXM -> RUSSIA
 ```
 
 This is evidence classification, not write authority. A suffix match never authorizes conversion,
-flashing, property mutation or bootloader changes.
+firmware installation, property mutation or bootloader changes.
 
 ## Output location
 
@@ -67,10 +103,11 @@ the selected candidate evidence. Look for an ADB observation with:
 
 ```json
 {
-  "mode": "regional-device",
+  "mode": "device",
   "capabilities": {
     "evidence_scope": "regional_customization",
-    "read_only": true
+    "read_only": true,
+    "regional_manifest_schema": "ttg.xray.android-regional-manifest.v2"
   }
 }
 ```
@@ -81,8 +118,16 @@ Useful fields include:
 - `capabilities.region_inference`
 - `capabilities.regional_packages`
 - `capabilities.google_stack`
+- `capabilities.google_integration`
 - `capabilities.regional_overlays`
-- `capabilities.customization_files`
+- `capabilities.customization_file_manifest`
+- `capabilities.firmware_regional_manifest`
+- `capabilities.firmware_regional_manifest_sha256`
+- `capabilities.user_regional_state`
+- `capabilities.user_regional_state_sha256`
+
+The two digests are deliberately separate. Firmware-region evidence can remain stable while current
+user state changes after a debloat, suspension or reinstall.
 
 ## Safety boundary
 
@@ -94,7 +139,7 @@ The regional probe does not:
 - mutate overlays;
 - read or write raw partitions;
 - unlock or relock the bootloader;
-- flash firmware.
+- install firmware.
 
 Any later repair or conversion operation must be implemented in a separately reviewed deterministic
 adapter and consume X-Ray evidence rather than extending X-Ray's authority.
