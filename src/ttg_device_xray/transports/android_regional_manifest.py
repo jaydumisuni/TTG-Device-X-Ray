@@ -29,6 +29,8 @@ class AndroidRegionalManifestProbe(AndroidRegionalProbe):
 
     FILE_MANIFEST_SCRIPT = r'''for root in \
 /cust \
+/system/etc/sysconfig \
+/system/etc/permissions \
 /product/etc/sysconfig \
 /product/etc/permissions \
 /system_ext/etc/sysconfig \

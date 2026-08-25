@@ -33,6 +33,8 @@ def test_file_manifest_keeps_cust_and_hashes_relevant_configs() -> None:
         "\n".join(
             [
                 f"/cust/cn/app/preload.json|123|{digest}",
+                f"/system/etc/sysconfig/google.xml|234|{digest}",
+                f"/system/etc/permissions/com.google.android.maps.xml|345|{digest}",
                 f"/product/etc/sysconfig/whitelist.xml|456|{digest}",
                 f"/product/etc/permissions/google-hiddenapi-package-whitelist.xml|789|{digest}",
                 f"/vendor/etc/audio_policy_configuration.xml|111|{digest}",
@@ -43,9 +45,18 @@ def test_file_manifest_keeps_cust_and_hashes_relevant_configs() -> None:
     by_path = {item["path"]: item for item in records}
     assert by_path["/cust/cn/app/preload.json"]["partition"] == "cust"
     assert by_path["/cust/cn/app/preload.json"]["sha256"] == digest
+    assert by_path["/system/etc/sysconfig/google.xml"]["partition"] == "system"
+    assert by_path["/system/etc/permissions/com.google.android.maps.xml"]["partition"] == "system"
     assert "/product/etc/sysconfig/whitelist.xml" in by_path
     assert "/product/etc/permissions/google-hiddenapi-package-whitelist.xml" in by_path
     assert "/vendor/etc/audio_policy_configuration.xml" not in by_path
+
+
+def test_file_manifest_script_scans_common_system_google_config_roots() -> None:
+    script = AndroidRegionalManifestProbe.FILE_MANIFEST_SCRIPT
+
+    assert "/system/etc/sysconfig" in script
+    assert "/system/etc/permissions" in script
 
 
 def test_google_integration_classifies_absent_partial_and_system() -> None:
@@ -97,6 +108,9 @@ def test_manifest_digest_is_order_independent_for_mapping_keys() -> None:
 
 
 def test_region_path_filter_avoids_unrelated_vendor_configs() -> None:
+    assert AndroidRegionalManifestProbe._is_region_relevant_path(
+        "/system/etc/permissions/com.google.android.maps.xml"
+    )
     assert AndroidRegionalManifestProbe._is_region_relevant_path(
         "/product/etc/permissions/com.google.android.maps.xml"
     )
