@@ -17,13 +17,13 @@ from .profile_loader import ProfileLoader
 from .regional_compare import RegionalCompareError, compare_regional_sources
 from .repair_readiness import build_repair_readiness
 from .transports.adb import AdbProbe
-from .transports.android_regional_manifest import AndroidRegionalManifestProbe
 from .transports.apple import AppleProbe
 from .transports.fastboot import FastbootProbe
 from .transports.mtk_meta import MtkMetaProbe
 from .transports.qualcomm_edl import QualcommEdlProbe
 from .transports.samsung_download import SamsungDownloadProbe
 from .transports.spd import SpdDownloadProbe
+from .transports.xiaomi_regional_manifest import XiaomiRegionalManifestProbe
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -218,7 +218,7 @@ def main(argv: list[str] | None = None) -> int:
     pipeline = EnhancedXRayPipeline(
         probes=[
             AdbProbe(platform_tools),
-            AndroidRegionalManifestProbe(platform_tools),
+            XiaomiRegionalManifestProbe(platform_tools),
             FastbootProbe(platform_tools),
             MtkMetaProbe(runner),
             QualcommEdlProbe(runner),

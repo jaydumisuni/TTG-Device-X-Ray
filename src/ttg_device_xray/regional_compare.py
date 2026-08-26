@@ -130,6 +130,28 @@ def _summary(diff: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def _xiaomi_selector_parts(
+    manifest: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Split Xiaomi selector metadata from its package policy for useful diffs."""
+
+    raw_selector = manifest.get("xiaomi_customization_selector")
+    if not isinstance(raw_selector, dict):
+        return {}, []
+
+    selector = dict(raw_selector)
+    raw_policy = selector.get("preload_policy")
+    policy = dict(raw_policy) if isinstance(raw_policy, dict) else {}
+    raw_packages = policy.pop("packages", [])
+    packages = (
+        [dict(item) for item in raw_packages if isinstance(item, dict)]
+        if isinstance(raw_packages, list)
+        else []
+    )
+    selector["preload_policy"] = policy
+    return selector, packages
+
+
 def compare_regional_manifests(
     left: dict[str, Any],
     right: dict[str, Any],
@@ -160,6 +182,19 @@ def compare_regional_manifests(
         dict(right.get("google_stack") or {}),
     )
 
+    left_selector, left_preloads = _xiaomi_selector_parts(left)
+    right_selector, right_preloads = _xiaomi_selector_parts(right)
+    xiaomi_selector = _mapping_diff(left_selector, right_selector)
+    xiaomi_preloads = _record_diff(
+        left_preloads,
+        right_preloads,
+        key_fields=("package",),
+    )
+    xiaomi_mi_ext = _mapping_diff(
+        dict(left.get("xiaomi_mi_ext") or {}),
+        dict(right.get("xiaomi_mi_ext") or {}),
+    )
+
     left_region = dict(left.get("region_inference") or {})
     right_region = dict(right.get("region_inference") or {})
     left_collection = dict(left.get("customization_file_collection") or {})
@@ -181,27 +216,23 @@ def compare_regional_manifests(
         },
         "region_changed": left_region != right_region,
         "summary": {
-            "properties": {
-                "added": len(properties["added"]),
-                "removed": len(properties["removed"]),
-                "changed": len(properties["changed"]),
-                "unchanged": properties["unchanged_count"],
-            },
+            "properties": _summary(properties),
             "regional_packages": _summary(packages),
             "regional_overlays": _summary(overlays),
             "customization_files": _summary(files),
-            "google_stack": {
-                "added": len(google["added"]),
-                "removed": len(google["removed"]),
-                "changed": len(google["changed"]),
-                "unchanged": google["unchanged_count"],
-            },
+            "google_stack": _summary(google),
+            "xiaomi_customization_selector": _summary(xiaomi_selector),
+            "xiaomi_preload_packages": _summary(xiaomi_preloads),
+            "xiaomi_mi_ext": _summary(xiaomi_mi_ext),
         },
         "properties": properties,
         "regional_packages": packages,
         "regional_overlays": overlays,
         "customization_files": files,
         "google_stack": google,
+        "xiaomi_customization_selector": xiaomi_selector,
+        "xiaomi_preload_packages": xiaomi_preloads,
+        "xiaomi_mi_ext": xiaomi_mi_ext,
     }
 
 
