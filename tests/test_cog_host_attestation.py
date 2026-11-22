@@ -9,16 +9,18 @@ import stat
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-pytestmark = pytest.mark.skipif(
-    os.name == "nt",
-    reason="Unix owner/0700/0600 custody test is not a valid Windows ACL proof",
-)
-
 from ttg_device_xray.bundle_seal import seal_bundle
 from ttg_device_xray.cog_host_attestation import (
     provision_host_trust,public_trust_identity,revoke_host_key,host_attest_bundle,
 )
 from ttg_device_xray.pipeline import XRayPipeline,write_bundle
+
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="Unix owner/0700/0600 custody test is not a valid Windows ACL proof",
+)
+
 
 
 def _setup(tmp_path, monkeypatch):
