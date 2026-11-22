@@ -39,6 +39,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+cog-host = ["cryptography>=43"]
 dev = [
   "build>=1.2",
   "pytest>=8.3",

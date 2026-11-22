@@ -197,3 +197,8 @@ authorization controls.
 ## License
 
 TTG Device X-Ray is open source under the MIT License. See `LICENSE`.
+
+
+## Optional host-owned COG evidence attestation
+
+For the opt-in native X-Ray HMAC verification, host-only Ed25519 observation signing, one-time host key enrollment and explicit revocation, see [Host-owned COG evidence authority](docs/COG_HOST_ATTESTATION.md). This facility is not automatically enrolled or activated and does not grant COG repair/write access.
