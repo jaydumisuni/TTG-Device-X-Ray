@@ -44,6 +44,11 @@ def _time(s: object) -> datetime:
 
 
 def _secure_root(root: Path, create: bool=False) -> Path:
+    if os.name == "nt":
+        raise ValueError(
+            "Windows host private-key custody requires a separately qualified "
+            "Windows ACL implementation; Unix mode bits are not authority"
+        )
     r=Path(root)
     if r.is_symlink():
         raise ValueError("symlinked trust root")
@@ -145,7 +150,8 @@ def _revocations(root: Path) -> list[dict]:
             raise ValueError("blank revocation journal entry")
         row=json.loads(line)
         expected=row.get("entry_sha256")
-        body=dict(row);body.pop("entry_sha256",None)
+        body=dict(row)
+        body.pop("entry_sha256",None)
         if body.get("previous_sha256")!=prev or sha256(_canon(body)).hexdigest()!=expected:
             raise ValueError("revocation chain invalid")
         if not isinstance(row.get("key_id"),str) or not row["key_id"]:
@@ -180,7 +186,8 @@ def revoke_host_key(root: Path, *, key_id: str, reason: str) -> dict:
     fd=os.open(path,os.O_CREAT|os.O_APPEND|os.O_WRONLY|getattr(os,"O_NOFOLLOW",0),0o600)
     with os.fdopen(fd,"ab") as f:
         f.write(_canon(body)+b"\n")
-        f.flush();os.fsync(f.fileno())
+        f.flush()
+        os.fsync(f.fileno())
     return {"key_id":key_id,"revoked":True,"revocation_entry_sha256":body["entry_sha256"]}
 
 
@@ -223,7 +230,8 @@ def _manifest(root: Path, key: bytes, state: dict, clock: datetime) -> dict:
     if not isinstance(scan,str) or not scan:
         raise ValueError("X-Ray generation unavailable")
     expectedsha=manifest.get("manifest_sha256")
-    unsigned=dict(manifest);unsigned.pop("manifest_sha256",None)
+    unsigned=dict(manifest)
+    unsigned.pop("manifest_sha256",None)
     if not isinstance(expectedsha,str) or not hmac.compare_digest(
         sha256(_canon(unsigned)).hexdigest(),expectedsha):
         raise ValueError("X-Ray manifest tampered")
@@ -255,27 +263,35 @@ def _manifest(root: Path, key: bytes, state: dict, clock: datetime) -> dict:
             or "\\" in name or "//" in name or
             any(x in ("..",".") for x in name.split("/"))):
             raise ValueError("X-Ray path traversal")
-        if name in expected:raise ValueError("duplicate X-Ray path")
+        if name in expected:
+            raise ValueError("duplicate X-Ray path")
         expected.add(name)
         p=root.joinpath(*PurePosixPath(name).parts)
         current=root
         for part in PurePosixPath(name).parts:
             current=current/part
-            if current.is_symlink():raise ValueError("linked X-Ray input")
-        if not p.is_file():raise ValueError("missing X-Ray file")
+            if current.is_symlink():
+                raise ValueError("linked X-Ray input")
+        if not p.is_file():
+            raise ValueError("missing X-Ray file")
         size=item["size_bytes"]
         if type(size) is not int or size<0 or size>MAX_FILE or p.stat().st_size!=size:
             raise ValueError("X-Ray file size mismatch")
         total+=size
-        if total>MAX_BUNDLE:raise ValueError("X-Ray bundle budget exceeded")
+        if total>MAX_BUNDLE:
+            raise ValueError("X-Ray bundle budget exceeded")
         if sha256(p.read_bytes()).hexdigest()!=item["sha256"]:
             raise ValueError("X-Ray file hash mismatch")
     seen=set()
     for index,p in enumerate(root.rglob("*")):
-        if index>512:raise ValueError("X-Ray directory count exceeded")
-        if p.is_symlink():raise ValueError("X-Ray symlink outside inventory")
-        if p.is_file():seen.add(p.relative_to(root).as_posix())
-    if seen!=expected:raise ValueError("X-Ray inventory missing/unlisted files")
+        if index>512:
+            raise ValueError("X-Ray directory count exceeded")
+        if p.is_symlink():
+            raise ValueError("X-Ray symlink outside inventory")
+        if p.is_file():
+            seen.add(p.relative_to(root).as_posix())
+    if seen!=expected:
+        raise ValueError("X-Ray inventory missing/unlisted files")
     if type(manifest.get("candidate_count")) is not int or manifest["candidate_count"]<0:
         raise ValueError("invalid candidate count")
     return manifest
@@ -294,7 +310,8 @@ def host_attest_bundle(root: Path, bundle_dir: Path, *, host_time: datetime|None
     if state["xray_hmac_key_id"] in revoked or state["cog_attestor_key_id"] in revoked:
         raise ValueError("host signer revoked")
     now=host_time or datetime.now(timezone.utc)
-    if now.tzinfo is None:raise ValueError("host clock must be timezone aware")
+    if now.tzinfo is None:
+        raise ValueError("host clock must be timezone aware")
     now=now.astimezone(timezone.utc)
     key=_read_secret(r/"xray_hmac.key")
     signer=serialization.load_pem_private_key(_read_secret(r/"cog_ed25519.pem"),password=None)
@@ -351,8 +368,10 @@ def main(argv: list[str] | None = None) -> int:
         if action=="revoke":
             cmd.add_argument("--key-id",required=True)
             cmd.add_argument("--reason",required=True)
-        if action=="attest":cmd.add_argument("--bundle",required=True)
-        if action=="scan":cmd.add_argument("--output",required=True)
+        if action=="attest":
+            cmd.add_argument("--bundle",required=True)
+        if action=="scan":
+            cmd.add_argument("--output",required=True)
     args=parser.parse_args(argv)
     trustroot=Path(args.root)
     if args.action=="enroll":

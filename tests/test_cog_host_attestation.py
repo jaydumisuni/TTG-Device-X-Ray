@@ -1,17 +1,18 @@
 """Native X-Ray host-owned trust enrollment, revocation and COG evidence."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from pathlib import Path
 import base64
-import hashlib
-import hmac
 import json
 import os
 import stat
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="Unix owner/0700/0600 custody test is not a valid Windows ACL proof",
+)
 
 from ttg_device_xray.bundle_seal import seal_bundle
 from ttg_device_xray.cog_host_attestation import (

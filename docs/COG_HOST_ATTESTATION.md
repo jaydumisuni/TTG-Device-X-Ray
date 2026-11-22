@@ -32,3 +32,12 @@ The private Cookpit proof is G1_XRAY_HOST_SIGNED_REAL_COG_BRIDGE_20261123.json. 
 ## Open release gates
 
 Independent G0/G1 owner and signing-key admission, a genuine connected-device readback, protected off-host revocation custody, real product execution permissions and G6 owner activation are still pending. This source does not register production effects, upgrade active COG, or merge a protected branch.
+
+
+## Windows qualification limitation
+
+The native X-Ray scanner remains cross-platform. Host private-key enrollment and
+attestation explicitly refuse Windows until a Windows ACL/DPAPI or equivalent
+OS owner-custody implementation receives separate security review. No Unix 0700/
+0600 mode claim is made on Windows. Windows smoke tests skip only these
+Linux-private-key custody checks; tests for the scanner remain enabled.
