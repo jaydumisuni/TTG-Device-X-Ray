@@ -70,7 +70,9 @@ def test_diag_vid_pid_without_matching_port_label_not_download_or_diag():
 
 
 def test_ghost_device_does_not_count_as_live_candidate():
-    pnp=real_pnp();pnp["Present"]=False;pnp["ConfigManagerErrorCode"]=45
+    pnp=real_pnp()
+    pnp["Present"]=False
+    pnp["ConfigManagerErrorCode"]=45
     r=SpdDiagnosticProbe(PnpRunner(pnp)).probe()
     assert len(r)==1 and not r[0].connected
 
