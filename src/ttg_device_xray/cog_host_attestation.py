@@ -7,16 +7,27 @@ attestation packets. Provisioning is pending owner/independent admission.
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import hmac
 import json
 import os
+import shutil
+import tempfile
 from pathlib import Path, PurePosixPath
 import re
 import secrets
 import stat
 import uuid
+
+if os.name != "nt":
+    import fcntl
+else:
+    fcntl = None
+
+MAX_REVOCATION_JOURNAL_BYTES = 131072
+MAX_REVOCATION_REASON_BYTES = 4096
 
 MANIFEST="bundle_manifest.json"
 SIGNATURE="bundle_manifest.sig"
@@ -29,6 +40,11 @@ MAX_FILE=4*1024*1024
 def _canon(value: object) -> bytes:
     return json.dumps(value,sort_keys=True,separators=(",",":"),
                       ensure_ascii=False,allow_nan=False).encode()
+
+
+def _native_canon(value: object) -> bytes:
+    """Use the exact JSON v2 serialization of X-Ray bundle_seal."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _time(s: object) -> datetime:
@@ -52,9 +68,9 @@ def _secure_root(root: Path, create: bool=False) -> Path:
     r=Path(root)
     if r.is_symlink():
         raise ValueError("symlinked trust root")
-    if create:
-        r.mkdir(parents=True,exist_ok=True,mode=0o700)
-        os.chmod(r,0o700)
+    if create and not r.exists():
+        r.mkdir(parents=True, exist_ok=False, mode=0o700)
+        os.chmod(r, 0o700)  # only the directory this operation created
     if not r.is_dir():
         raise ValueError("trust root unavailable")
     mode=r.stat()
@@ -63,6 +79,31 @@ def _secure_root(root: Path, create: bool=False) -> Path:
     if stat.S_IMODE(mode.st_mode)&0o077:
         raise ValueError("trust root permissions expose private authority")
     return r
+
+
+@contextmanager
+def _owner_lock(root: Path):
+    """Serialize revocation and signing; no Windows mode-bit approximation."""
+    r = _secure_root(root)
+    if fcntl is None:
+        raise ValueError("host owner locking requires reviewed POSIX custody")
+    lock_path = r / ".owner.lock"
+    if lock_path.is_symlink():
+        raise ValueError("owner lock symlink forbidden")
+    fd = os.open(
+        lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600
+    )
+    try:
+        mode = os.fstat(fd)
+        if mode.st_uid != os.geteuid() or stat.S_IMODE(mode.st_mode) & 0o077:
+            raise ValueError("host lock ownership or permissions unsafe")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def _read_secret(path: Path, maxbytes: int=4096) -> bytes:
@@ -109,9 +150,11 @@ def provision_host_trust(root: Path, *, product_id: str, host_id: str) -> dict:
         raise ValueError("invalid host identity")
     if not isinstance(product_id,str) or not re.fullmatch(r"[a-z0-9_.-]{3,90}",product_id):
         raise ValueError("invalid registered product ID")
-    root=_secure_root(root,create=True)
-    if any(root.iterdir()):
+    root = Path(root)
+    if root.exists() or root.is_symlink():
+        _secure_root(root)  # validate, never alter an existing directory
         raise ValueError("host trust already initialized; refuse key replacement")
+    root.parent.mkdir(parents=True, exist_ok=True)
     stamp=datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     uid=uuid.uuid4().hex[:20]
     hmac_keyid="ttg-xray-"+host_id+"-hmac-"+uid
@@ -130,10 +173,21 @@ def provision_host_trust(root: Path, *, product_id: str, host_id: str) -> dict:
         "operator_review_required":True,"independent_gate_accepted":False,
         "revocation_journal":"revocations.jsonl",
     }
-    # Secure key files are never returned to caller nor committed to Git.
-    _new_secret(root/"xray_hmac.key",hmac_secret)
-    _new_secret(root/"cog_ed25519.pem",private)
-    _new_secret(root/"registry.json",json.dumps(data,sort_keys=True,indent=2).encode())
+    # Build a complete private enrollment in a fresh 0700 sibling first.
+    # A failed write can be retried; it never publishes a partial final root.
+    staging = Path(tempfile.mkdtemp(prefix="." + root.name + ".provision-", dir=root.parent))
+    try:
+        _new_secret(staging / "xray_hmac.key", hmac_secret)
+        _new_secret(staging / "cog_ed25519.pem", private)
+        _new_secret(
+            staging / "registry.json", json.dumps(data, sort_keys=True, indent=2).encode()
+        )
+        if root.exists() or root.is_symlink():
+            raise ValueError("host trust already initialized; refuse key replacement")
+        os.rename(staging, root)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
     return public_trust_identity(root)
 
 
@@ -162,34 +216,57 @@ def _revocations(root: Path) -> list[dict]:
 
 
 def revoke_host_key(root: Path, *, key_id: str, reason: str) -> dict:
-    """Explicit host-owner action: append-only revocation, no un-revoke API."""
-    r=_secure_root(root)
-    state=_registry(r)
-    allowed=(state["xray_hmac_key_id"],state["cog_attestor_key_id"])
-    if key_id not in allowed:
-        raise ValueError("unknown host signing key")
-    if not isinstance(reason,str) or len(reason.strip())<6:
+    """Owner revocation: serialized, atomic, monotone, with bounded records."""
+    r = _secure_root(root)
+    if not isinstance(reason, str) or len(reason.strip()) < 6:
         raise ValueError("revocation requires reason")
-    rows=_revocations(r)
-    if any(row["key_id"]==key_id for row in rows):
-        raise ValueError("signer already revoked")
-    prior=rows[-1]["entry_sha256"] if rows else "0"*64
-    body={"schema":"ttg.xray.host-revocation.v1","key_id":key_id,
-          "reason":reason,"observed_at":datetime.now(timezone.utc).isoformat(),
-          "previous_sha256":prior}
-    body["entry_sha256"]=sha256(_canon(body)).hexdigest()
-    path=r/"revocations.jsonl"
-    # Append is owned by this host. Physical deletion/rollback still requires
-    # independent OS/backup custody to defeat a compromised host principal.
-    if path.is_symlink():
-        raise ValueError("revocation journal symlink forbidden")
-    fd=os.open(path,os.O_CREAT|os.O_APPEND|os.O_WRONLY|getattr(os,"O_NOFOLLOW",0),0o600)
-    with os.fdopen(fd,"ab") as f:
-        f.write(_canon(body)+b"\n")
-        f.flush()
-        os.fsync(f.fileno())
-    return {"key_id":key_id,"revoked":True,"revocation_entry_sha256":body["entry_sha256"]}
-
+    if len(reason.encode("utf-8")) > MAX_REVOCATION_REASON_BYTES:
+        raise ValueError("revocation reason exceeds byte limit")
+    with _owner_lock(r):
+        state = _registry(r)
+        allowed = (state["xray_hmac_key_id"], state["cog_attestor_key_id"])
+        if key_id not in allowed:
+            raise ValueError("unknown host signing key")
+        rows = _revocations(r)
+        if any(row["key_id"] == key_id for row in rows):
+            raise ValueError("signer already revoked")
+        prior = rows[-1]["entry_sha256"] if rows else "0" * 64
+        body = {
+            "schema": "ttg.xray.host-revocation.v1",
+            "key_id": key_id,
+            "reason": reason,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "previous_sha256": prior,
+        }
+        body["entry_sha256"] = sha256(_canon(body)).hexdigest()
+        path = r / "revocations.jsonl"
+        if path.is_symlink():
+            raise ValueError("revocation journal symlink forbidden")
+        existing = _read_secret(path, MAX_REVOCATION_JOURNAL_BYTES) if path.exists() else b""
+        entry = _canon(body) + b"\\n"
+        if len(existing) + len(entry) > MAX_REVOCATION_JOURNAL_BYTES:
+            raise ValueError("revocation journal would exceed byte limit")
+        fd, temp_name = tempfile.mkstemp(prefix=".revocations-", suffix=".tmp", dir=r)
+        temp_path = Path(temp_name)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(existing + entry)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(temp_path, 0o600)
+            os.replace(temp_path, path)
+            dirfd = os.open(r, os.O_RDONLY)
+            try:
+                os.fsync(dirfd)
+            finally:
+                os.close(dirfd)
+        finally:
+            temp_path.unlink(missing_ok=True)
+        return {
+            "key_id": key_id,
+            "revoked": True,
+            "revocation_entry_sha256": body["entry_sha256"],
+        }
 
 def public_trust_identity(root: Path) -> dict:
     state=_registry(root)
@@ -233,7 +310,7 @@ def _manifest(root: Path, key: bytes, state: dict, clock: datetime) -> dict:
     unsigned=dict(manifest)
     unsigned.pop("manifest_sha256",None)
     if not isinstance(expectedsha,str) or not hmac.compare_digest(
-        sha256(_canon(unsigned)).hexdigest(),expectedsha):
+        sha256(_native_canon(unsigned)).hexdigest(),expectedsha):
         raise ValueError("X-Ray manifest tampered")
     if (report.get("status")!="SIGNED"
         or report.get("algorithm")!="hmac-sha256"
@@ -248,7 +325,7 @@ def _manifest(root: Path, key: bytes, state: dict, clock: datetime) -> dict:
     except ValueError as exc:
         raise ValueError("X-Ray signature hex invalid") from exc
     if not hmac.compare_digest(
-       hmac.new(key,_canon(manifest),"sha256").digest(),sigbytes):
+       hmac.new(key,_native_canon(manifest),"sha256").digest(),sigbytes):
         raise ValueError("X-Ray HMAC could not be verified")
     files=manifest.get("files")
     if not isinstance(files,list) or not 1<=len(files)<=128:
@@ -280,7 +357,18 @@ def _manifest(root: Path, key: bytes, state: dict, clock: datetime) -> dict:
         total+=size
         if total>MAX_BUNDLE:
             raise ValueError("X-Ray bundle budget exceeded")
-        if sha256(p.read_bytes()).hexdigest()!=item["sha256"]:
+        fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            with os.fdopen(fd, "rb") as stream:
+                mode = os.fstat(stream.fileno())
+                if not stat.S_ISREG(mode.st_mode) or mode.st_size != size:
+                    raise ValueError("X-Ray file changed during verification")
+                actual = stream.read(size + 1)
+                if len(actual) != size:
+                    raise ValueError("X-Ray file changed during verification")
+        except BaseException:
+            raise
+        if sha256(actual).hexdigest()!=item["sha256"]:
             raise ValueError("X-Ray file hash mismatch")
     seen=set()
     for index,p in enumerate(root.rglob("*")):
@@ -298,10 +386,15 @@ def _manifest(root: Path, key: bytes, state: dict, clock: datetime) -> dict:
 
 
 def host_attest_bundle(root: Path, bundle_dir: Path, *, host_time: datetime|None=None) -> dict:
-    """Verify native HMAC in host-private process and emit Ed25519 claim.
+    """Serialize revocation read, manifest verification and signing."""
+    with _owner_lock(root):
+        return _host_attest_bundle_locked(root, bundle_dir, host_time=host_time)
 
-    COG receives ONLY this signed claim and a separately configured public key.
-    """
+
+def _host_attest_bundle_locked(
+    root: Path, bundle_dir: Path, *, host_time: datetime|None=None
+) -> dict:
+    """Host owns HMAC and Ed25519 keys; no COG-issued trust anchor."""
     from cryptography.hazmat.primitives import serialization
 
     r=_secure_root(root)
@@ -317,7 +410,8 @@ def host_attest_bundle(root: Path, bundle_dir: Path, *, host_time: datetime|None
     signer=serialization.load_pem_private_key(_read_secret(r/"cog_ed25519.pem"),password=None)
     pub=signer.public_key().public_bytes(serialization.Encoding.Raw,
                                            serialization.PublicFormat.Raw)
-    assert base64.b64encode(pub).decode()==state["cog_attestor_ed25519_public_b64"]
+    if base64.b64encode(pub).decode() != state["cog_attestor_ed25519_public_b64"]:
+        raise ValueError("host attestor private/public key mismatch")
     manifest=_manifest(Path(bundle_dir),key,state,now)
     obs={
       "obligation_id":"xray.device_candidate_count",
@@ -327,13 +421,18 @@ def host_attest_bundle(root: Path, bundle_dir: Path, *, host_time: datetime|None
       "kind":"direct_readback",
       "value":manifest["candidate_count"],
     }
+    # Revalidate expiry at signing time, after all native file reads.
+    sign_now = host_time or datetime.now(timezone.utc)
+    sign_now = sign_now.astimezone(timezone.utc)
+    if sign_now >= _time(manifest["expires_at"]):
+        raise ValueError("native X-Ray bundle expired before signing")
     envelope={
       "schema":COG_SCHEMA,"claim_kind":"observation",
       "key_id":state["cog_attestor_key_id"],
       "payload":{
          "product_id":state["product_id"],"snapshot_generation":manifest["scan_id"],
-         "issued_at":(now-timedelta(seconds=2)).isoformat(),
-         "expires_at":min(now+timedelta(seconds=60),
+         "issued_at":(sign_now-timedelta(seconds=2)).isoformat(),
+         "expires_at":min(sign_now+timedelta(seconds=60),
                           _time(manifest["expires_at"])).isoformat(),
          "observation":obs,
       },
