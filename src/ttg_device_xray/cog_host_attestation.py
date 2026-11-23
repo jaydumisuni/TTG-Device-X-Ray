@@ -243,7 +243,7 @@ def revoke_host_key(root: Path, *, key_id: str, reason: str) -> dict:
         if path.is_symlink():
             raise ValueError("revocation journal symlink forbidden")
         existing = _read_secret(path, MAX_REVOCATION_JOURNAL_BYTES) if path.exists() else b""
-        entry = _canon(body) + b"\\n"
+        entry = _canon(body) + b"\n"
         if len(existing) + len(entry) > MAX_REVOCATION_JOURNAL_BYTES:
             raise ValueError("revocation journal would exceed byte limit")
         fd, temp_name = tempfile.mkstemp(prefix=".revocations-", suffix=".tmp", dir=r)
