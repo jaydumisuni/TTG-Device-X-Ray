@@ -11,6 +11,7 @@ class TransportKind(str, Enum):
     MTK_META = "mtk_meta"
     QUALCOMM_EDL = "qualcomm_edl"
     SPD_DOWNLOAD = "spd_download"
+    SPD_DIAGNOSTIC = "spd_diagnostic"
     SAMSUNG_DOWNLOAD = "samsung_download"
     APPLE_NORMAL = "apple_normal"
     APPLE_RECOVERY = "apple_recovery"

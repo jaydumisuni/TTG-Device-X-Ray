@@ -41,3 +41,19 @@ attestation explicitly refuse Windows until a Windows ACL/DPAPI or equivalent
 OS owner-custody implementation receives separate security review. No Unix 0700/
 0600 mode claim is made on Windows. Windows smoke tests skip only these
 Linux-private-key custody checks; tests for the scanner remain enabled.
+
+
+## Real SPRD diagnostic USB readback
+
+The read-only X-Ray transports now include a separate `spd_diagnostic`
+presence observation for the Windows PnP `SPRD U2S Diag` interface at USB
+VID 1782, PID 4D00. This is distinct from SPD download: observing a diagnostic
+USB endpoint does not prove a valid download session, FDL loader access,
+storage/partition access, product firmware identity or permission to write.
+No diagnostic port is opened and no service command is issued. Other UNISOC
+USB devices remain unqualified unless independently matched.
+
+ATHENA PnP reported the COM52 interface physically present and healthy.
+An earlier X-Ray scan missed the exact diagnostic label and returned zero
+candidates. Positive, negative and ghost-device tests now cover this
+classification; a source-bound physical rescan is required before admission.

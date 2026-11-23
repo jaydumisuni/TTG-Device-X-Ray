@@ -23,6 +23,7 @@ from .transports.mtk_meta import MtkMetaProbe
 from .transports.qualcomm_edl import QualcommEdlProbe
 from .transports.samsung_download import SamsungDownloadProbe
 from .transports.spd import SpdDownloadProbe
+from .transports.spd_diagnostic import SpdDiagnosticProbe
 from .transports.xiaomi_regional_manifest import XiaomiRegionalManifestProbe
 
 
@@ -179,6 +180,11 @@ def main(argv: list[str] | None = None) -> int:
                             **_helper_status("TTG_SPD"),
                             "vendor_hint": "1782",
                         },
+                        "spd_diagnostic": {
+                            **_helper_status("TTG_SPD_DIAGNOSTIC"),
+                            "observed_vid_pid": "1782:4D00",
+                            "purpose": "diagnostic-presence-only; no download claim",
+                        },
                         "samsung_download": {
                             **_helper_status("TTG_SAMSUNG_DOWNLOAD"),
                             "vendor_hint": "04E8",
@@ -223,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
             MtkMetaProbe(runner),
             QualcommEdlProbe(runner),
             SpdDownloadProbe(runner),
+            SpdDiagnosticProbe(runner),
             SamsungDownloadProbe(runner),
             AppleProbe(runner),
         ]
