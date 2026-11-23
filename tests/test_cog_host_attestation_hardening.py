@@ -121,7 +121,8 @@ def test_exact_native_v2_unicode_manifest_verifies(tmp_path, monkeypatch):
     })
     unsigned = dict(manifest)
     unsigned.pop("manifest_sha256", None)
-    native = lambda obj: json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()
+    def native(obj):
+        return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()
     manifest["manifest_sha256"] = hashlib.sha256(native(unsigned)).hexdigest()
     report = json.loads(report_path.read_text())
     report["manifest_sha256"] = manifest["manifest_sha256"]
