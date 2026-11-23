@@ -16,36 +16,12 @@ class SpdDiagnosticProbe(ReadOnlyUsbServiceProbe):
     device_regex = r"(?i)(USB\\VID_1782&PID_4D00\b.*\bSPRD\s+U2S\s+Diag\b)"
     linux_usb_regex = r"(?i)\bID\s+1782:4D00\b"
 
-    def probe(self):
-        """A configured helper cannot assert connection or download mode."""
-        observations = super().probe()
-        for observation in observations:
-            ids = observation.identifiers
-            if not ids:
-                continue  # original unavailable/no-device observation
-            endpoint = {
-                "usb_vid": ids.get("usb_vid", ""),
-                "usb_pid": ids.get("usb_pid", ""),
-                "name": ids.get("usb_name", ""),
-                "usb_path": ids.get("usb_path", ""),
-                "present": str(
-                    observation.capabilities.get("pnp_present", True)
-                ).lower(),
-            }
-            qualified = (
-                observation.available
-                and observation.capabilities.get("pnp_present") is not False
-                and self._verified_diag_endpoint(endpoint)
-            )
-            observation.connected = bool(qualified)
-            observation.mode = "diagnostic" if qualified else "unqualified-usb"
-            observation.capabilities["transport_confirmed"] = bool(qualified)
-            observation.capabilities["diagnostic_port_confirmed_by_usb"] = bool(qualified)
-            observation.capabilities["download_mode_confirmed_by_usb"] = False
-            observation.capabilities["fdl_sent"] = False
-            observation.capabilities["serial_port_opened"] = False
-            observation.capabilities["read_only"] = True
-        return observations
+    def _run_helper(self, endpoint):
+        """Do not execute or trust unqualified DIAG helper commands.
+
+        This transport proves only read-only Windows PnP/lsusb presence.
+        """
+        return {}, None, ""
 
     @staticmethod
     def _verified_diag_endpoint(endpoint: dict[str, str]) -> bool:
