@@ -252,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         probes=[
             AdbProbe(platform_tools, deep=args.deep),
             XiaomiRegionalManifestProbe(platform_tools),
-            FastbootProbe(platform_tools, deep=args.deep),
+            FastbootProbe(platform_tools, deep=args.deep, readback_root=args.output),
             MtkMetaProbe(runner),
             QualcommEdlProbe(runner),
             SpdDownloadProbe(runner),

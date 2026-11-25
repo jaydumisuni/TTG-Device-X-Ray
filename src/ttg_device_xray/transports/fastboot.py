@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
+
+from ..analyzers.deep_diagnostics import inspect_partition
 
 from ..command import Runner
 from ..models import TransportKind, TransportObservation
@@ -10,9 +14,11 @@ from ..models import TransportKind, TransportObservation
 class FastbootProbe:
     name = "fastboot"
 
-    def __init__(self, runner: Runner, *, deep: bool = False) -> None:
+    def __init__(self, runner: Runner, *, deep: bool = False,
+                 readback_root: Path | None = None) -> None:
         self.runner = runner
         self.deep = deep
+        self.readback_root = readback_root
 
     def probe(self) -> list[TransportObservation]:
         if not self.runner.exists("fastboot"):
@@ -42,7 +48,7 @@ class FastbootProbe:
             if self.deep:
                 fetch = self.runner.run(["fastboot", "-s", serial, "getvar", "max-fetch-size"])
                 commands.append(fetch)
-                match = re.search(r"max-fetch-size:\s*(0x[0-9a-fA-F]+|[0-9]+)",
+                match = re.search(r"max-fetch-size:[ \t]*(0x[0-9a-fA-F]+|[0-9]+)",
                                   fetch.stdout + "\n" + fetch.stderr)
                 if (fetch.return_code == 0 and match
                         and int(match.group(1), 16 if match.group(1).startswith("0x") else 10)):
@@ -67,6 +73,9 @@ class FastbootProbe:
                                          info.stdout + "\n" + info.stderr, re.I)
                         if info.return_code == 0 and lock:
                             identifiers["unlocked"] = "yes" if lock.group(1).lower() == "unlock" else "no"
+            integrity: list[dict[str, Any]] = []
+            if self.deep and self.readback_root is not None and identifiers.get("max-fetch-size"):
+                integrity = self._readback(serial, partitions, commands)
             unlocked = identifiers.get("unlocked") == "yes"
             secure = identifiers.get("secure") == "yes"
             observations.append(
@@ -80,6 +89,7 @@ class FastbootProbe:
                         "unlocked": unlocked,
                         "bootloader_locked": not unlocked if identifiers.get("unlocked") else None,
                         "secure": secure,
+                        **({"partition_integrity": integrity} if self.deep else {}),
                         "slot_count": identifiers.get("slot-count", ""),
                         "current_slot": identifiers.get("current-slot", ""),
                         "dynamic_partitions_detected": any(
@@ -102,6 +112,37 @@ class FastbootProbe:
                 )
             )
         return observations
+
+    def _readback(self, serial: str, partitions: list[dict[str, Any]],
+                  commands: list[Any]) -> list[dict[str, Any]]:
+        # Explicit deep scan only, allow-listed boot-chain images, known size <=128 MiB.
+        # Scratch lives under the requested project evidence root, never a global temp.
+        assert self.readback_root is not None
+        self.readback_root.mkdir(parents=True, exist_ok=True)
+        results = []
+        with TemporaryDirectory(prefix=".readback-", dir=self.readback_root) as tmp:
+            for p in partitions:
+                name, size = p.get("name"), p.get("size_bytes", 0)
+                if name not in {"boot", "boot_a", "boot_b", "recovery",
+                                "recovery_a", "recovery_b"}:
+                    continue
+                if not isinstance(size, int) or not 0 < size <= 128 * 1024 * 1024:
+                    continue
+                path = Path(tmp) / f"{name}.img"
+                evidence = self.runner.run(
+                    ["fastboot", "-s", serial, "fetch", name, str(path)], timeout=90
+                )
+                commands.append(evidence)
+                row = {"name": name, "kind": "boot", "size_bytes": size,
+                       "source": "fastboot-fetch"}
+                if (evidence.return_code == 0 and path.is_file()
+                        and path.stat().st_size == size):
+                    row.update(inspect_partition(path, "boot"))
+                    row["scope"] = "DEVICE_PARTITION_READBACK"
+                else:
+                    row.update(status="UNKNOWN", detail="Readback failed or incomplete")
+                results.append(row)
+        return results
 
     @staticmethod
     def _parse_size(value: str) -> int:

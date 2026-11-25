@@ -226,3 +226,9 @@ an operator-supplied JSON object containing `model`, `build` and a
 same-model, same-build, same-size readbacks are compared. It records byte
 differences without calling them corruption, and does not establish vendor
 signature authenticity.
+
+Fastboot deep scans also attempt bounded readback of sized boot/recovery
+partitions when the endpoint advertises a nonzero fetch capability. Temporary
+images are kept under the chosen evidence root during inspection, then
+discarded; hashes, header findings and command results remain in the report.
+An unsupported, denied or incomplete readback is not a corruption finding.

@@ -106,3 +106,39 @@ def test_structural_evidence_correlates_without_storage_assumption():
     assert causes["partition_corruption"] == "SUSPECTED"
     assert causes["boot_chain_failure"] == "SUSPECTED"
     assert causes["storage_failure"] == "UNKNOWN"
+
+
+def test_supported_fastboot_readback_is_bounded_and_scoped(tmp_path):
+    class FakeRunner:
+        def exists(self, executable):
+            return True
+
+        def run(self, command, timeout=20):
+            if len(command) > 3 and command[3] == "fetch":
+                from pathlib import Path
+
+                assert command[4] == "boot"
+                target = Path(command[5])
+                assert tmp_path in target.parents
+                raw = bytearray(8192)
+                raw[:8] = b"ANDROID!"
+                struct.pack_into("<I", raw, 8, 4096)
+                struct.pack_into("<I", raw, 36, 4096)
+                target.write_bytes(raw)
+                return CommandEvidence(command, 0)
+            responses = {
+                "devices": "example fastboot",
+                "all": ("product: test\npartition-size:boot: 8192\n"
+                        "partition-size:userdata: 8192"),
+                "max-fetch-size": "max-fetch-size: 8192",
+                "get-product-model": "",
+            }
+            return CommandEvidence(command, 0, stdout=responses[command[-1]])
+
+    obs = FastbootProbe(FakeRunner(), deep=True, readback_root=tmp_path).probe()[0]
+    result = obs.capabilities["partition_integrity"]
+    assert len(result) == 1
+    assert result[0]["status"] == "HEADER_VALID"
+    assert result[0]["scope"] == "DEVICE_PARTITION_READBACK"
+    assert len(result[0]["sha256"]) == 64
+    assert not list(tmp_path.iterdir())

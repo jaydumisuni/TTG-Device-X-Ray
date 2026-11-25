@@ -59,14 +59,14 @@ def parse_health(text: str) -> dict[str, Any]:
         if not values or any(v < 0 or v > 255 for v in values):
             continue
         is_eol = field in {"pre_eol_info", "eol_info"}
-        valid = all(1 <= v <= (3 if is_eol else 11) for v in values)
+        known = [v for v in values if 1 <= v <= (3 if is_eol else 11)]
+        worst = max(known, default=0)
         health.append({
             "source": source, "field": field, "values": values,
             "status": (
-                "UNKNOWN" if not valid else
-                "URGENT" if (max(values) == 3 if is_eol else max(values) == 11) else
-                "WARNING" if (max(values) == 2 if is_eol else max(values) >= 9) else
-                "REPORTED"
+                "URGENT" if (worst == 3 if is_eol else worst == 11) else
+                "WARNING" if (worst == 2 if is_eol else worst >= 9) else
+                "REPORTED" if len(known) == len(values) else "UNKNOWN"
             ),
         })
     return {"health_descriptors": health, "physical_start_sectors_512": starts}
@@ -159,6 +159,10 @@ def inspect_header(head: bytes, size: int, kind: str) -> tuple[str, str]:
     return status, detail
 
 
+def _dict_rows(value: Any) -> list[dict[str, Any]]:
+    return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
+
+
 def diagnose(observations: list[TransportObservation]) -> dict[str, Any]:
     active = [o for o in observations if o.connected]
     modes = sorted({o.transport.value for o in active})
@@ -167,15 +171,16 @@ def diagnose(observations: list[TransportObservation]) -> dict[str, Any]:
         storage = o.capabilities.get("deep_storage", {})
         if not isinstance(storage, dict):
             continue
-        for row in storage.get("health_descriptors", []):
+        for row in _dict_rows(storage.get("health_descriptors")):
             if isinstance(row, dict) and row.get("status") in {
                 "REPORTED", "WARNING", "URGENT", "UNKNOWN"
             }:
                 health.append({"transport": o.transport.value, **row})
     errors = [{"transport": o.transport.value, **e}
-              for o in active for e in o.capabilities.get("deep_errors", [])]
-    known = {e.get("kind") for e in errors}
-    integrity = [p for o in active for p in o.capabilities.get("partition_integrity", [])]
+              for o in active for e in _dict_rows(o.capabilities.get("deep_errors"))]
+    known = {e["kind"] for e in errors if isinstance(e.get("kind"), str)}
+    integrity = [{"transport": o.transport.value, **p}
+                 for o in active for p in _dict_rows(o.capabilities.get("partition_integrity"))]
     builds = sorted({o.identifiers.get("build", "").strip() for o in active
                      if o.identifiers.get("build", "").strip()})
     structural = [p for p in integrity if p.get("status") == "STRUCTURAL_ERROR"]
@@ -190,8 +195,13 @@ def diagnose(observations: list[TransportObservation]) -> dict[str, Any]:
     if active and "adb" not in modes and any(o.transport.value == "fastboot" for o in active):
         routes.append({"interface": "adb-recovery", "status": "NOT_OBSERVED",
                        "next": "Operator may enter recovery; verify identity again"})
+    if "fastboot" not in modes and any(o.transport.value == "adb" for o in active):
+        routes.append({"interface": "fastboot", "status": "NOT_OBSERVED",
+                       "next": "Consider bootloader only if current ADB evidence is insufficient"})
     if "qualcomm_edl" not in modes and any(
         re.match(r"^(MSM|SDM|SM)\d", o.identifiers.get("product", ""), re.I)
+        or any(re.match(r"^(MSM|SDM|SM)\d", o.identifiers.get(k, ""), re.I)
+               for k in ("chipset", "soc", "board"))
         or "qualcomm" in o.identifiers.get("chipset", "").lower()
         for o in active
     ):
