@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import time
@@ -25,8 +26,15 @@ class CommandRunner:
     def run(self, command: list[str], timeout: int = 20) -> CommandEvidence:
         started = time.perf_counter()
         try:
+            # The native scanner uses signing keys only in its own process.
+            # Never inherit signer credentials into adb/fastboot/custom helpers.
+            child_env = {
+                key: value for key, value in os.environ.items()
+                if key not in {"TTG_XRAY_SIGNING_KEY", "TTG_XRAY_SIGNING_KEY_ID"}
+            }
             result = subprocess.run(
                 command,
+                env=child_env,
                 capture_output=True,
                 text=True,
                 timeout=timeout,

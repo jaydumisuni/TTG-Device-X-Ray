@@ -16,6 +16,7 @@ class EnhancedXRayPipeline(XRayPipeline):
         TransportKind.MTK_META,
         TransportKind.QUALCOMM_EDL,
         TransportKind.SPD_DOWNLOAD,
+        TransportKind.SPD_DIAGNOSTIC,
         TransportKind.SAMSUNG_DOWNLOAD,
     }
 

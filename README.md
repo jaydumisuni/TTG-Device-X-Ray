@@ -14,6 +14,8 @@ repair, flash, or unbrick recommendation.
 
 ## Active transports
 
+- Universal USB/PnP inventory across Windows and Linux, independent of model
+  profiles, device labels and fixed VID/PID allowlists
 - Android Debug Bridge (ADB)
 - Fastboot / Fastbootd
 - MTK Preloader and Kernel META (`0E8D:2000` / `0E8D:2007`)
@@ -101,6 +103,37 @@ python scripts/validate_profiles.py
 python scripts/validate_fixtures.py
 python scripts/check_read_only.py
 ```
+
+## Universal hardware discovery
+
+Enumerate connected USB endpoints even when X-Ray has no model-specific profile:
+
+    ttg-xray discover
+    ttg-xray discover --output evidence/usb-inventory.json
+
+The discovery result contains VID:PID, a 16-hex non-raw inventory ID, OS
+interface class and separately represented candidate/protocol status. It does
+not open a serial port or send any USB diagnostic, reset or firmware command.
+
+Choose a specific unknown interface using its inventory ID (this also
+distinguishes two physical devices sharing the same VID:PID):
+
+    ttg-xray discover --target-device INVENTORY_ID
+    ttg-xray scan --target-device INVENTORY_ID --output scans
+
+Alternatively investigate every present interface with a matching VID:PID:
+
+    ttg-xray scan --target-usb 1234:5678 --output scans
+
+The selected endpoint is a read-only candidate, NOT a confirmed servicing
+protocol. The specialized ADB, Fastboot, EDL, SPD and DFU probes still
+independently verify those capabilities. Keyboard, camera, hub and other
+host peripherals appear in the inventory without automatic promotion.
+
+Windows uses present PnP or the WMI fallback; Linux uses lsusb. Scans are
+bounded to 256 interfaces and disclose truncation. The discover command
+returns unsigned OS evidence. Signed scan bundles remain separate, as do
+G0–G6 admission and effect authority.
 
 ## Run
 
@@ -197,3 +230,8 @@ authorization controls.
 ## License
 
 TTG Device X-Ray is open source under the MIT License. See `LICENSE`.
+
+
+## Optional host-owned COG evidence attestation
+
+For the opt-in native X-Ray HMAC verification, host-only Ed25519 observation signing, one-time host key enrollment and explicit revocation, see [Host-owned COG evidence authority](docs/COG_HOST_ATTESTATION.md). This facility is not automatically enrolled or activated and does not grant COG repair/write access.
