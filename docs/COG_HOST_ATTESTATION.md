@@ -57,3 +57,20 @@ ATHENA PnP reported the COM52 interface physically present and healthy.
 An earlier X-Ray scan missed the exact diagnostic label and returned zero
 candidates. Positive, negative and ghost-device tests now cover this
 classification; a source-bound physical rescan is required before admission.
+
+
+## Universal USB evidence beyond model-specific detectors
+
+X-Ray now has a vendor-neutral universal USB inventory probe. This records
+all physically present USB VID:PID interfaces visible to the Windows PnP
+inventory or Linux lsusb. Unknown device brands/models no longer vanish just
+because there is no service-mode matcher. Read-only discover exposes sanitized
+VID:PID and a non-raw inventory ID.
+
+The operator may select an unknown device by inventory ID, including when
+multiple endpoints share the same VID:PID, or select by VID:PID. Selection
+confirms only OS USB presence. Device model, firmware, storage, download mode,
+partition access, signed product-key custody and servicing capabilities require
+separate evidence; no new write authority is provided. Host peripherals remain
+discoverable but not automatic service candidates. G0–G6 admission remains
+unchanged.
