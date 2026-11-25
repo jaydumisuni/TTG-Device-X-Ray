@@ -193,7 +193,11 @@ class XRayPipeline:
             elif observation.transport == TransportKind.FASTBOOT:
                 if identity.platform == "unknown":
                     identity.platform = "android"
-                identity.internal_model = ids.get("product", identity.internal_model)
+                identity.internal_model = ids.get("model", ids.get("product", identity.internal_model))
+                identity.brand = ids.get("brand", identity.brand)
+                identity.manufacturer = ids.get("brand", identity.manufacturer)
+                identity.chipset = ids.get("chipset", identity.chipset)
+                identity.build = ids.get("build", identity.build)
                 identity.serial = ids.get("serial", ids.get("serialno", identity.serial))
                 identity.bootloader = ids.get("version-bootloader", identity.bootloader)
                 identity.baseband = ids.get("version-baseband", identity.baseband)

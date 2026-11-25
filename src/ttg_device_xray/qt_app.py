@@ -216,7 +216,7 @@ class ScanWorker(QObject):
             with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
                 code = int(
                     cli_main(
-                        ["scan", "--output", str(self.output_directory), "--no-hunter"]
+                        ["scan", "--deep", "--output", str(self.output_directory)]
                     )
                 )
         except BaseException:

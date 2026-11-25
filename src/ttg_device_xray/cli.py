@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .analyzers.deep_diagnostics import bundle_diagnostics, inspect_partition, load_reference
 from .analyzers.ipsw import IpswAnalysisError, write_ipsw_report
 from .bundle_seal import seal_bundle
 from .command import CommandRunner
@@ -34,6 +35,13 @@ def build_parser() -> argparse.ArgumentParser:
     scan = subparsers.add_parser("scan", help="Run a read-only device scan")
     scan.add_argument("--output", type=Path, default=Path("scans"))
     scan.add_argument("--mission", default="identify-and-plan")
+    scan.add_argument("--deep", action="store_true", help="Collect additional read-only diagnostics")
+    scan.add_argument("--reference-manifest", type=Path,
+                      help="Compare available hashes with an operator-supplied exact-build manifest")
+    inspect = subparsers.add_parser("inspect-partition", help="Inspect a local raw partition image")
+    inspect.add_argument("path", type=Path)
+    inspect.add_argument("--kind", choices=["boot", "filesystem", "raw"], required=True)
+    inspect.add_argument("--reference", type=Path)
     scan.add_argument(
         "--profile-dir",
         type=Path,
@@ -209,6 +217,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    if args.command == "inspect-partition":
+        try:
+            print(json.dumps(inspect_partition(args.path, args.kind, args.reference), indent=2))
+            return 0
+        except (OSError, ValueError) as exc:
+            print(json.dumps({"error": str(exc)}))
+            return 2
+
     if args.command == "compare-regional":
         return _run_regional_compare(args)
 
@@ -221,11 +237,22 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, indent=2))
         return 0
 
+    reference = None
+    if args.reference_manifest:
+        if not args.deep:
+            print(json.dumps({"error": "--reference-manifest requires --deep"}))
+            return 2
+        try:
+            reference = load_reference(args.reference_manifest)
+        except (OSError, ValueError) as exc:
+            print(json.dumps({"error": str(exc)}))
+            return 2
+
     pipeline = EnhancedXRayPipeline(
         probes=[
-            AdbProbe(platform_tools),
+            AdbProbe(platform_tools, deep=args.deep),
             XiaomiRegionalManifestProbe(platform_tools),
-            FastbootProbe(platform_tools),
+            FastbootProbe(platform_tools, deep=args.deep),
             MtkMetaProbe(runner),
             QualcommEdlProbe(runner),
             SpdDownloadProbe(runner),
@@ -247,7 +274,12 @@ def main(argv: list[str] | None = None) -> int:
         bundle.plan["adapter_contracts"] = bundle.profile_match.adapter_contracts
         bundle.plan["transport_priority"] = bundle.profile_match.transport_priority
 
+    if args.deep:
+        bundle.plan["deep_diagnostics"] = bundle_diagnostics(bundle, reference)
     target = write_bundle(bundle, args.output)
+    if args.deep:
+        (target / "deep_diagnostics.json").write_text(
+            json.dumps(bundle.plan["deep_diagnostics"], indent=2), encoding="utf-8")
     profile_loader.write_match(bundle, target)
     seal = seal_bundle(target, bundle)
     print(
@@ -266,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
                 "storage": bundle.storage.to_dict(),
                 "profile_match": profile_payload,
                 "repair_readiness": repair_readiness,
+                "deep_diagnostics": bundle.plan.get("deep_diagnostics"),
                 "bundle_seal": seal,
                 "output": str(target),
             },

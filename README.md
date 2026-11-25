@@ -202,3 +202,27 @@ TTG Device X-Ray is open source under the MIT License. See `LICENSE`.
 ## Optional host-owned COG evidence attestation
 
 For the opt-in native X-Ray HMAC verification, host-only Ed25519 observation signing, one-time host key enrollment and explicit revocation, see [Host-owned COG evidence authority](docs/COG_HOST_ATTESTATION.md). This facility is not automatically enrolled or activated and does not grant COG repair/write access.
+
+### Deep read-only diagnostics
+
+Use `ttg-xray scan --deep --mission diagnose-boot-failure --output scans` to
+collect manufacturer-aware Fastboot identity, transport alternatives, supported
+ADB/recovery sysfs storage health, kernel error evidence, partition offsets,
+bounded boot-chain hashes and header checks. Results are candidate-scoped in
+`deep_diagnostics.json` and sealed with the scan. No mode switching or device
+writes are performed. Missing or denied evidence remains unknown.
+
+Use `ttg-xray inspect-partition boot.img --kind boot --reference stock-boot.img`
+for local raw-image inspection and SHA-256 comparison. Use `--kind filesystem`
+for ext superblock geometry/F2FS magic, or `--kind raw` for hashing. Header
+checks are not full filesystem, signature, or firmware authentication. A
+different hash does not by itself prove corruption or a firmware mismatch.
+Qualcomm EDL requires an independently reviewed compatible helper and a
+connected EDL endpoint; the scanner does not load a programmer or enter EDL.
+
+For a live deep scan, optional `--reference-manifest exact-build.json` accepts
+an operator-supplied JSON object containing `model`, `build` and a
+`partitions` mapping (partition name to `size_bytes` and `sha256`). Only
+same-model, same-build, same-size readbacks are compared. It records byte
+differences without calling them corruption, and does not establish vendor
+signature authenticity.

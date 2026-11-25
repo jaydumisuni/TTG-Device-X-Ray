@@ -3,6 +3,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from ..analyzers.deep_diagnostics import (
+    ERROR_SCRIPT,
+    HEALTH_SCRIPT,
+    classify_errors,
+    inspect_header,
+    parse_health,
+)
 from ..command import Runner
 from ..models import TransportKind, TransportObservation
 
@@ -61,8 +68,9 @@ t=$(cat "$p/device/type" 2>/dev/null)
 printf '%s|%s|%s|%s|%s\n' "$b" "$s" "$l" "$m" "$t"
 done'''
 
-    def __init__(self, runner: Runner) -> None:
+    def __init__(self, runner: Runner, *, deep: bool = False) -> None:
         self.runner = runner
+        self.deep = deep
 
     def _adb(self, serial: str, *args: str, timeout: int = 20):
         return self.runner.run(["adb", "-s", serial, *args], timeout=timeout)
@@ -93,12 +101,12 @@ done'''
             observation = TransportObservation(
                 transport=TransportKind.ADB,
                 available=True,
-                connected=state == "device",
+                connected=state == "device" or (self.deep and state == "recovery"),
                 mode=state,
                 identifiers={"serial": serial},
                 commands=[listing],
             )
-            if state != "device":
+            if state != "device" and not (self.deep and state == "recovery"):
                 observation.warnings.append(f"ADB device state is {state}")
                 observations.append(observation)
                 continue
@@ -186,6 +194,27 @@ done'''
                     observation.identifiers.get("dynamic_partitions", "")
                 ) or any(item.get("name") == "super" for item in observation.partitions)
 
+            if self.deep:
+                health = self._adb(serial, "shell", "sh", "-c", HEALTH_SCRIPT)
+                errors = self._adb(serial, "shell", "sh", "-c", ERROR_SCRIPT)
+                observation.commands.extend([health, errors])
+                parsed = parse_health(health.stdout) if health.return_code == 0 else parse_health("")
+                observation.capabilities["deep_storage"] = parsed
+                observation.capabilities["deep_errors"] = (
+                    classify_errors(errors.stdout) if errors.return_code == 0 else []
+                )
+                observation.capabilities["deep_storage_query_status"] = health.return_code
+                observation.capabilities["deep_error_query_status"] = errors.return_code
+                observation.capabilities["partition_integrity"] = self._inspect_partitions(
+                    serial, observation
+                )
+                for partition in observation.partitions:
+                    start = parsed["physical_start_sectors_512"].get(
+                        partition.get("block_device")
+                    )
+                    if start is not None:
+                        partition["start_sector_512"] = start
+                        partition["start_offset_bytes"] = start * 512
             observation.capabilities["partition_count"] = len(observation.partitions)
             observation.capabilities["sized_partition_count"] = sum(
                 1 for item in observation.partitions if int(item.get("size_bytes", 0) or 0) > 0
@@ -207,6 +236,48 @@ done'''
                 )
             )
         return observations
+
+    def _inspect_partitions(
+        self, serial: str, observation: TransportObservation
+    ) -> list[dict[str, Any]]:
+        results = []
+        for partition in observation.partitions:
+            name = partition.get("name", "")
+            if name not in {"boot", "boot_a", "boot_b", "recovery", "recovery_a",
+                            "recovery_b", "system", "system_a", "system_b", "vendor",
+                            "vendor_a", "vendor_b"}:
+                continue
+            target = partition.get("target", "")
+            size = partition.get("size_bytes", 0)
+            if not re.fullmatch(r"/dev/block/[A-Za-z0-9_./-]+", target) or ".." in target:
+                continue
+            if not isinstance(size, int) or size < 4096:
+                continue
+            kind = "boot" if name.startswith(("boot", "recovery")) else "filesystem"
+            row = {"name": name, "kind": kind, "size_bytes": size, "source": "adb-read-only"}
+            header = self._adb(serial, "shell", "od", "-An", "-v", "-tx1", "-N", "4096", target)
+            observation.commands.append(header)
+            try:
+                raw = bytes.fromhex(header.stdout) if header.return_code == 0 else b""
+            except ValueError:
+                raw = b""
+            if len(raw) == 4096:
+                row["status"], row["detail"] = inspect_header(raw, size, kind)
+            else:
+                row.update(status="UNKNOWN", detail="Partition header unavailable")
+                if re.search(r"(?i)input/output error|\bI/O error\b", header.stderr):
+                    row["read_error"] = "IO_ERROR"
+            # Bounded whole-image hash only for boot-chain partitions, never userdata.
+            if kind == "boot" and size <= 128 * 1024 * 1024 and len(raw) == 4096:
+                checksum = self._adb(serial, "shell", "sha256sum", target, timeout=45)
+                observation.commands.append(checksum)
+                match = re.match(r"^([0-9a-fA-F]{64})\s", checksum.stdout)
+                if checksum.return_code == 0 and match:
+                    row["sha256"] = match.group(1).lower()
+                elif re.search(r"(?i)input/output error|\bI/O error\b", checksum.stderr):
+                    row["read_error"] = "IO_ERROR"
+            results.append(row)
+        return results
 
     @staticmethod
     def _truthy(value: str) -> bool:
